@@ -150,9 +150,3 @@ For exact wire formats and record layouts, see CORE.md.
   - Y = total files discovered before transfer
   - X = successful transfers only (failures and skips are not added)
   - Exit code is non‑zero if any failures occurred
-
-## Limitations / Future Work
-
-- Resume/retry across disconnects (manifest + ranges) not implemented yet.
-- QUIC transport is not included (stdlib‑only); TCP is used with an explicit record layer.
-- For the strongest containment guarantees, consider chroot/containers in addition to Depot’s app‑level share root checks.
