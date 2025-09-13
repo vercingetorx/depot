@@ -7,7 +7,6 @@ type
 
 proc hasDotDot*(p: string): bool =
   ## Detects path traversal attempts using '..' components.
-  var comp = newSeq[string]()
   for part in p.split(DirSep):
     if part.len == 0 or part == ".": continue
     if part == "..": return true
