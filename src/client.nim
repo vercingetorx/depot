@@ -289,7 +289,8 @@ type UploadState = object
   skipped: int
   totalFiles: int
 
-proc uploadSingleFile(sess: Session, path: string, st: var UploadState) {.async.} =
+proc uploadSingleFile(sess: Session, path: string,
+    st: var UploadState) {.async.} =
   let destRel = fmt"{st.base}{extractFilename(path)}"
   try:
     await uploadFile(sess, path, destRel)
@@ -310,7 +311,8 @@ proc uploadSingleFile(sess: Session, path: string, st: var UploadState) {.async.
     stderr.writeLine(e.msg)
     inc st.failed
 
-proc uploadDirTree(sess: Session, rootPath: string, st: var UploadState) {.async.} =
+proc uploadDirTree(sess: Session, rootPath: string,
+    st: var UploadState) {.async.} =
   let root = absolutePath(rootPath)
   let topName = extractFilename(root)
   for p in walkDirRec(rootPath):
@@ -393,7 +395,8 @@ type DownloadState = object
   currentPerms: set[FilePermission]
   localDest: string
 
-proc startNewFile(st: var DownloadState, relativePath: string, fileSize: int64, skipExisting: bool) =
+proc startNewFile(st: var DownloadState, relativePath: string, fileSize: int64,
+    skipExisting: bool) =
   ## Begin writing a new target file under localDest, creating parents.
   ## The remote path is a forward-slash separated relative path.
   st.totalBytes = fileSize
@@ -419,7 +422,7 @@ proc startNewFile(st: var DownloadState, relativePath: string, fileSize: int64, 
   st.firstFile = false
   st.receivedBytes = 0
   st.startMs = nowMs()
-  st.directoryDownloadHasher = newBlake2bCtx(digestSize=32)
+  st.directoryDownloadHasher = newBlake2bCtx(digestSize = 32)
 
 proc onFileData(sess: Session, st: var DownloadState, payload: seq[byte]) =
   ## Handle a data chunk during directory download; writes or discards.
@@ -441,7 +444,8 @@ proc onFileData(sess: Session, st: var DownloadState, payload: seq[byte]) =
     printProgress2("downloading", extractFilename(st.targetPath),
         st.receivedBytes, st.totalBytes, st.startMs)
 
-proc onFileClose(sess: Session, st: var DownloadState, payload: seq[byte]) {.async.} =
+proc onFileClose(sess: Session, st: var DownloadState, payload: seq[
+    byte]) {.async.} =
   ## Complete the current file during directory download.
   if st.skipCurrent:
     clearProgress()
@@ -511,7 +515,7 @@ proc downloadTo*(sess: Session, remotePath: string, localDest: string,
   var st: DownloadState
   st.firstFile = true
   st.startMs = nowMs()
-  st.directoryDownloadHasher = newBlake2bCtx(digestSize=32)
+  st.directoryDownloadHasher = newBlake2bCtx(digestSize = 32)
   st.localDest = localDest
 
   # Phase: main receive loop

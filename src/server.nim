@@ -70,13 +70,15 @@ proc handleUploadOpen(st: var ClientState, payload: seq[byte]) {.async.} =
   var destAbs: string
   if sandboxed:
     if relativeDestPath.len > 0 and relativeDestPath[0] == '/':
-      errorSid(st, encodeServer(ecAbsolute, "client sent absolute path in sandbox mode: " & relativeDestPath))
+      errorSid(st, encodeServer(ecAbsolute,
+          "client sent absolute path in sandbox mode: " & relativeDestPath))
       await st.session.sendRecord(UploadFail.uint8, @[toByte(ecAbsolute)])
       return
     try:
       destAbs = cleanJoin(st.importDir, relativeDestPath)
     except CatchableError:
-      errorSid(st, encodeServer(ecUnsafePath, "client sent unsafe path: " & relativeDestPath))
+      errorSid(st, encodeServer(ecUnsafePath, "client sent unsafe path: " &
+          relativeDestPath))
       await st.session.sendRecord(UploadFail.uint8, @[toByte(ecUnsafePath)])
       return
   else:
@@ -92,7 +94,8 @@ proc handleUploadOpen(st: var ClientState, payload: seq[byte]) {.async.} =
   st.pendingPermissions = srcPerms
   # refuse early if destination already exists (unless server allows overwrite)
   if fileExists(st.currentPath) and not allowOverwrite:
-    errorSid(st, encodeServer(ecExists, "destination file exists: " & st.currentPath))
+    errorSid(st, encodeServer(ecExists, "destination file exists: " &
+        st.currentPath))
     await st.session.sendRecord(UploadFail.uint8, @[toByte(ecExists)])
     return
   # ensure parent directories exist and aren't symlinks
@@ -102,7 +105,8 @@ proc handleUploadOpen(st: var ClientState, payload: seq[byte]) {.async.} =
     try:
       let info = getFileInfo(parentDir)
       if info.kind == pcLinkToDir:
-        errorSid(st, encodeServer(ecUnsafePath, "parent directory is a symlink: " & parentDir))
+        errorSid(st, encodeServer(ecUnsafePath,
+            "parent directory is a symlink: " & parentDir))
         await st.session.sendRecord(UploadFail.uint8, @[toByte(ecUnsafePath)])
         return
     except OSError:
@@ -111,7 +115,8 @@ proc handleUploadOpen(st: var ClientState, payload: seq[byte]) {.async.} =
     st.currentFile = open(st.partialPath, fmWrite)
   except OSError as e:
     let ec = errors.osErrorToCode(e, ecOpenFail)
-    errorSid(st, encodeServer(ec, "failed to open partial file for writing: " & st.partialPath & " " & e.msg))
+    errorSid(st, encodeServer(ec, "failed to open partial file for writing: " &
+        st.partialPath & " " & e.msg))
     await st.session.sendRecord(UploadFail.uint8, @[toByte(ec)])
     return
   await st.session.sendRecord(UploadOk.uint8, newSeq[byte]())
@@ -123,7 +128,8 @@ proc handleUploadDataChunk(st: var ClientState, payload: seq[byte]) =
       st.uploadHasher.update(payload)
     except OSError as e:
       let ec = errors.osErrorToCode(e, ecWriteFail)
-      errorSid(st, encodeServer(ec, "failed to write to partial file: " & st.partialPath & " " & e.msg))
+      errorSid(st, encodeServer(ec, "failed to write to partial file: " &
+          st.partialPath & " " & e.msg))
       try: st.currentFile.close() except: discard
       st.currentFile = nil
       discard tryRemoveFile(st.partialPath)
@@ -147,7 +153,8 @@ proc handleUploadCommit(st: var ClientState, payload: seq[byte]) {.async.} =
       for i in 0 ..< 32:
         if got[i] != payload[i]: match = false
     if not match:
-      errorSid(st, encodeServer(ecChecksum, "checksum mismatch for " & st.currentPath))
+      errorSid(st, encodeServer(ecChecksum, "checksum mismatch for " &
+          st.currentPath))
       discard tryRemoveFile(st.partialPath)
       await sendErrorCode(st, ecChecksum)
       st.currentFile = nil
@@ -155,7 +162,9 @@ proc handleUploadCommit(st: var ClientState, payload: seq[byte]) {.async.} =
       st.partialPath = ""
       return
     if fileExists(st.currentPath) and not allowOverwrite:
-      errorSid(st, encodeServer(ecExists, "destination file exists and overwrite is disabled: " & st.currentPath))
+      errorSid(st, encodeServer(ecExists,
+          "destination file exists and overwrite is disabled: " &
+          st.currentPath))
       discard tryRemoveFile(st.partialPath)
       await sendErrorCode(st, ecExists)
     else:
@@ -282,7 +291,8 @@ proc handleDownloadRequest(st: var ClientState, payload: seq[byte]) {.async.} =
   var absReq: string
   if sandboxed:
     if relReqFull.len > 0 and relReqFull[0] == '/':
-      errorSid(st, encodeServer(ecAbsolute, "client sent absolute path in sandbox mode: " & relReqFull))
+      errorSid(st, encodeServer(ecAbsolute,
+          "client sent absolute path in sandbox mode: " & relReqFull))
       await st.session.sendRecord(ErrorRec.uint8, @[toByte(ecAbsolute)])
       return
     try:
@@ -299,8 +309,10 @@ proc handleDownloadRequest(st: var ClientState, payload: seq[byte]) {.async.} =
 
   if fileExists(absReq):
     infoSid(st, fmt"download request: {relReqFull}")
-    let relativePath = if absReq.isRelativeTo(st.exportDir): absReq.relativePath(
-        st.exportDir).replace(DirSep, '/') else: relReqFull
+    let relativePath = if absReq.isRelativeTo(
+        st.exportDir): absReq.relativePath(
+
+st.exportDir).replace(DirSep, '/') else: relReqFull
     await streamFileIfAccepted(st, relativePath)
     await st.session.sendRecord(DownloadDone.uint8, newSeq[byte]())
   elif dirExists(absReq):
@@ -330,7 +342,8 @@ proc handleListRequest(st: var ClientState, payload: seq[byte]) {.async.} =
   var absReq: string
   if sandboxed:
     if relReqFull.len > 0 and relReqFull[0] == '/':
-      errorSid(st, encodeServer(ecAbsolute, "client sent absolute path in sandbox mode: " & relReqFull))
+      errorSid(st, encodeServer(ecAbsolute,
+          "client sent absolute path in sandbox mode: " & relReqFull))
       await st.session.sendRecord(ErrorRec.uint8, @[toByte(ecAbsolute)])
       return
     try:
@@ -345,8 +358,10 @@ proc handleListRequest(st: var ClientState, payload: seq[byte]) {.async.} =
     else:
       absReq = normalizedPath(st.exportDir / relReqFull)
   if fileExists(absReq):
-    let relativePath = if absReq.isRelativeTo(st.exportDir): absReq.relativePath(
-        st.exportDir).replace(DirSep, '/') else: relReqFull
+    let relativePath = if absReq.isRelativeTo(
+        st.exportDir): absReq.relativePath(
+
+st.exportDir).replace(DirSep, '/') else: relReqFull
     let size = getFileSize(absReq)
     var buf = newSeq[byte]()
     let item = protocol.encodeListItem(relativePath, int64(size), 0'u8)
@@ -437,7 +452,8 @@ proc handleClient*(sock: AsyncSocket, baseDir: string) {.async.} =
           let ec = fromByte(payload[0])
           errorSid(st, encodeServer(ec))
         else:
-          errorSid(st, encodeServer(ecUnknown, "client sent invalid error record"))
+          errorSid(st, encodeServer(ecUnknown,
+              "client sent invalid error record"))
       else:
         discard
   except CatchableError as e:

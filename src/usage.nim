@@ -1,3 +1,5 @@
+import std/[os, strutils, parseopt, logging, asyncdispatch, strformat]
+
 proc usage*() =
   echo "depot: secure file transfer (Kyber + XChaCha20-Poly1305)"
   echo "usage:"
