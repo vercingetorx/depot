@@ -4,7 +4,7 @@
 
 Depot is a simple, post‑quantum‑ready file transfer tool. It favors a clean CLI, strong defaults, and explicit safety:
 
-- Modern cryptography with CRYSTALS‑Kyber (KEM), CRYSTALS‑Dilithium (identity), and XChaCha20‑Poly1305 (AEAD).
+- Modern cryptography with CRYSTALS‑Kyber (KEM), CRYSTALS‑Dilithium (identity), Argon2 (KDF), XChaCha20‑Poly1305 (AEAD).
 - Sandboxed filesystem mode by default (no absolute paths; no escaping the share root).
 - Clear, friendly error messages and live progress with a growing file history.
 
