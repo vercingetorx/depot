@@ -1,4 +1,4 @@
-# WIP
+WIP
 
 # Depot — Secure File Transfer (Kyber + XChaCha20)
 
@@ -10,7 +10,7 @@ Depot is a simple, post‑quantum‑ready file transfer tool. It favors a clean 
 
 ## Security Overview (brief)
 
-- TOFU identity pinning with CRYSTALS‑Dilithium; Kyber KEM for session keys; XChaCha20‑Poly1305 for records.
+- TOFU identity pinning with CRYSTALS‑Dilithium; Kyber KEM for session keys; Argon2 (session keys and key‑at‑rest); XChaCha20‑Poly1305 for records.
 - Sandboxed filesystem mode by default (no absolute paths; normalized under roots).
 - Atomic write/commit with integrity‑on‑commit checksums; partials removed on abort.
 
@@ -104,10 +104,6 @@ listen = 0.0.0.0
 port   = 60006
 base   = /home/user/Downloads
 sandbox = true
-
-# Optional absolute roots (used in sandbox mode)
-# exportRoot = /home/user/Downloads/depot/export
-# importRoot = /home/user/Downloads/depot/import
 
 [Client]
 host = your.server
