@@ -231,22 +231,12 @@ proc streamFileIfAccepted(st: var ClientState, relativePath: string) {.async.} =
     let (atk, apl) = await st.session.recvRecord()
     if atk == PathSkip.uint8:
       # Expect 1-byte reason code
-      var codeName = reasonUnknown
+      var ec = ecUnknown
       if apl.len == 1:
-        case apl[0]
-        of byte(SkipReason.srExists): codeName = reasonExists
-        of byte(SkipReason.srFilter): codeName = reasonFilter
-        of byte(SkipReason.srAbsolute): codeName = reasonAbsolute
-        of byte(SkipReason.srUnsafePath): codeName = reasonUnsafePath
-        of byte(SkipReason.srBadPayload): codeName = reasonBadPayload
-        of byte(SkipReason.srPerms): codeName = reasonPerms
-        of byte(SkipReason.srNoSpace): codeName = reasonNoSpace
-        of byte(SkipReason.srTimeout): codeName = reasonTimeout
-        else: codeName = reasonUnknown
-      else:
-        codeName = reasonUnknown
+        ec = fromByte(apl[0])
+      let codeName = codeName(ec)
       # Suppress logs for list operations (handled via List* records now)
-      if codeName != reasonFilter:
+      if ec != ecFilter:
         infoSid(st, fmt"client skipped: {relativePath} (reason: {codeName})")
       return
     elif atk == 0'u8:
@@ -254,19 +244,11 @@ proc streamFileIfAccepted(st: var ClientState, relativePath: string) {.async.} =
       infoSid(st, "unexpected ack, treating as skip: type=0")
       return
     elif atk != PathAccept.uint8:
-      var codeName = reasonUnknown
+      var ec = ecUnknown
       if apl.len == 1:
-        case apl[0]
-        of byte(SkipReason.srExists): codeName = reasonExists
-        of byte(SkipReason.srFilter): codeName = reasonFilter
-        of byte(SkipReason.srAbsolute): codeName = reasonAbsolute
-        of byte(SkipReason.srUnsafePath): codeName = reasonUnsafePath
-        of byte(SkipReason.srBadPayload): codeName = reasonBadPayload
-        of byte(SkipReason.srPerms): codeName = reasonPerms
-        of byte(SkipReason.srNoSpace): codeName = reasonNoSpace
-        of byte(SkipReason.srTimeout): codeName = reasonTimeout
-        else: discard
-      if codeName != reasonFilter:
+        ec = fromByte(apl[0])
+      let codeName = codeName(ec)
+      if ec != ecFilter:
         infoSid(st, fmt"unexpected ack, treating as skip: type={atk}, reason: {codeName}")
       return
   # Only announce send after explicit accept

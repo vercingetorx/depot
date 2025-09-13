@@ -18,13 +18,3 @@ type Rt* = enum
   RekeyReq = 0x60'u8
   RekeyAck = 0x61'u8
 
-type SkipReason* = enum
-  ## Compact reason codes used in PathSkip payloads (1 byte).
-  srExists = 1'u8
-  srFilter = 2'u8
-  srAbsolute = 3'u8
-  srUnsafePath = 4'u8
-  srBadPayload = 5'u8
-  srPerms = 6'u8
-  srNoSpace = 7'u8
-  srTimeout = 8'u8

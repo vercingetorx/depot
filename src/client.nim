@@ -530,7 +530,7 @@ proc downloadTo*(sess: Session, remotePath: string, localDest: string,
       let existsLocally = fileExists(fullPath)
       if existsLocally:
         var b: array[1, byte]
-        b[0] = byte(SkipReason.srExists)
+        b[0] = toByte(ecExists)
         await sess.sendRecord(PathSkip.uint8, b)
         st.skipCurrent = true
         if skipExisting:
