@@ -1,5 +1,7 @@
 ## Shared error/status message constants used in depot protocol payloads.
 import std/strutils
+when defined(posix): import posix
+when defined(windows): import winlean
 
 const
   errBadPath* = "bad path"
@@ -25,6 +27,7 @@ const
   reasonBadPath* = "bad-path"
   reasonBadPayload* = "bad-payload"
   reasonOpenFail* = "open-fail"
+  reasonWriteFail* = "write-fail"
   reasonReadFail* = "read-fail"
   reasonNotFound* = "not-found"
   reasonTimeout* = "timeout"
@@ -47,6 +50,7 @@ type
     ecBadPath
     ecBadPayload
     ecOpenFail
+    ecWriteFail
     ecReadFail
     ecNotFound
     ecTimeout
@@ -66,6 +70,7 @@ proc codeName*(c: ErrorCode): string =
   of ecBadPath: reasonBadPath
   of ecBadPayload: reasonBadPayload
   of ecOpenFail: reasonOpenFail
+  of ecWriteFail: reasonWriteFail
   of ecReadFail: reasonReadFail
   of ecNotFound: reasonNotFound
   of ecTimeout: reasonTimeout
@@ -91,6 +96,7 @@ proc clientMessage*(c: ErrorCode): string =
   of ecBadPath: "bad path"
   of ecBadPayload: "bad payload"
   of ecOpenFail: "open failed"
+  of ecWriteFail: "write failed"
   of ecReadFail: "read failed"
   of ecNotFound: "item not found"
   of ecTimeout: "timeout"
@@ -111,6 +117,7 @@ proc serverMessage*(c: ErrorCode): string =
   of ecBadPath: "bad path"
   of ecBadPayload: "bad payload"
   of ecOpenFail: "open failed"
+  of ecWriteFail: "write failed"
   of ecReadFail: "read failed"
   of ecNotFound: "not found"
   of ecTimeout: "timeout"
@@ -120,11 +127,12 @@ proc serverMessage*(c: ErrorCode): string =
   of ecAuth: "client authentication error"
   else: "unknown"
 
-proc encodeClient*(c: ErrorCode): string = "[" & codeName(c) & "] " & clientMessage(c)
-proc encodeServer*(c: ErrorCode): string = "[" & codeName(c) & "] " & serverMessage(c)
+import std/strformat
 
-proc encodeReason*(code, message: string): string =
-  "[" & code & "] " & message
+proc encodeClient*(c: ErrorCode): string = fmt"[{codeName(c)}] {clientMessage(c)}"
+proc encodeServer*(c: ErrorCode): string = fmt"[{codeName(c)}] {serverMessage(c)}"
+
+proc encodeReason*(code, message: string): string = fmt"[{code}] {message}"
 
 proc splitReason*(msg: string): tuple[code, text: string] =
   ## If `msg` starts with "[code] ", extract code and remainder; otherwise code="".
@@ -147,6 +155,7 @@ proc reasonFromServerMsg*(msg: string): string =
   if msg.startsWith(errBadPath): return reasonBadPath
   if msg.startsWith(errBadPayload): return reasonBadPayload
   if msg.startsWith(errOpenFail): return reasonOpenFail
+  if msg.startsWith(errWriteFail): return reasonWriteFail
   if msg.startsWith(errReadFail): return reasonReadFail
   if msg.startsWith(errNotFound): return reasonNotFound
   if msg.startsWith(errChecksumMismatch): return reasonChecksum
@@ -165,3 +174,15 @@ proc formatClientError*(msg: string): string =
     return encodeReason(code, m)
   # Add a generic code for unclassified messages
   return encodeReason(reasonUnknown, m)
+
+proc osErrorToCode*(e: ref OSError, fallback: ErrorCode): ErrorCode =
+  ## Map platform-specific OSError codes to protocol ErrorCode variants.
+  when defined(posix):
+    let c = cint(e.errorCode)
+    if c == ENOSPC: return ecNoSpace
+    if c == EACCES or c == EPERM: return ecPerms
+  elif defined(windows):
+    let c = int32(e.errorCode)
+    if c == ERROR_DISK_FULL.int32 or c == ERROR_HANDLE_DISK_FULL.int32: return ecNoSpace
+    if c == ERROR_ACCESS_DENIED.int32 or c == ERROR_WRITE_PROTECT.int32 or c == ERROR_SHARING_VIOLATION.int32: return ecPerms
+  return fallback
