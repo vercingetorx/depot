@@ -418,24 +418,7 @@ proc handleClient*(sock: AsyncSocket, baseDir: string) {.async.} =
   try:
     st.session = await serverHandshake(sock, sandboxed)
   except CatchableError as e:
-    # Convert client-coded handshake message to server-coded log line and include details
-    let (codeStr, text) = errors.splitReason(e.msg)
-    var ec = ecUnknown
-    if codeStr.len > 0:
-      case codeStr
-      of reasonBadPayload: ec = ecBadPayload
-      of reasonCompat: ec = ecCompat
-      of reasonAuth: ec = ecAuth
-      of reasonConfig: ec = ecConfig
-      of reasonTimeout: ec = ecTimeout
-      of reasonNotFound: ec = ecNotFound
-      of reasonPerms: ec = ecPerms
-      of reasonNoSpace: ec = ecNoSpace
-      else: ec = ecUnknown
-    var logMsg = errors.encodeServer(ec)
-    if text.len > 0:
-      logMsg = fmt"{logMsg}: {text}"
-    errorSid(st, logMsg)
+    errorSid(st, e.msg)
     try: sock.close() except: discard
     infoSid(st, "client disconnected")
     return

@@ -388,7 +388,6 @@ type DownloadState = object
   totalBytesAll: int64
   receivedBytesAll: int64
   skipCurrent: bool
-  pendingErr: string
   directoryDownloadHasher: Blake2bCtx
   currentMtime: int64
   currentPerms: set[FilePermission]
