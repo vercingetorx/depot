@@ -1,6 +1,6 @@
 ## CLI entrypoint: subcommand parsing and dispatch to server/client.
 import std/[os, strutils, parseopt, logging, asyncdispatch]
-import src/[client, handshake, server, userconfig, errors]
+import src/[client, handshake, server, userconfig]
 
 const version* = "0.1.0"
 # const commit* {.strdefine.}: string = "unknown"
@@ -66,6 +66,11 @@ proc usageServe() =
   echo "  --allow-overwrite      Allow uploads to overwrite existing files"
   echo "  --key-pass PASS        Encrypt/load server key with this passphrase"
 
+proc usageConfig() =
+  echo "depot config --init [--force]"
+  echo "  --init  Scaffold ~/.config/depot/depot.conf"
+  echo "  --force Overwrite existing config"
+
 proc usageExport() =
   echo "depot export FILE... [options]"
   echo "  --host HOST            Server host"
@@ -106,6 +111,15 @@ proc usageLs() =
   echo ""
   echo "Sandboxed server: --remote-dir must be relative and maps under exportRoot."
   echo "No-sandbox server: --remote-dir may be absolute."
+
+proc usageFor(mode: string) =
+  case mode
+  of "serve": usageServe()
+  of "export": usageExport()
+  of "import": usageImport()
+  of "ls": usageLs()
+  of "config": usageConfig()
+  else: usage()
 
 proc setupLogging(level: string) =
   ## Configure console logger with a consistent format and chosen level.
@@ -272,31 +286,52 @@ proc main() =
   var keyPass = ""
   var unknownFlags: seq[string]
   var expectValueFor = ""
+  # Option helpers to DRY up parsing/apply logic
+  proc needsValue(opt: string): bool =
+    ## Return true if this option expects a value
+    case opt
+    of "listen", "port", "base", "log", "host",
+       "remote-dir", "dest", "local-dir", "rport",
+       "export-root", "import-root", "key-pass": true
+    else: false
+
+  proc applyOpt(opt: string, val: string) =
+    ## Apply a normalized (hyphenated, lowercase) option to state.
+    case opt
+    of "listen": listen = val
+    of "port":
+      port = parseInt(val); remotePort = port
+    of "base": base = val
+    of "log": logLevel = val
+    of "version", "v": versionFlag = true
+    of "init": topInitFlag = true
+    of "force": topForceFlag = true
+    of "host": host = val
+    of "remote-dir":
+      if mode == "export": remoteDest = val
+      elif mode == "import": remoteSource = val
+      elif mode == "ls": remoteList = val
+    of "dest", "local-dir":
+      if mode == "import": localDest = val
+    of "rport": remotePort = parseInt(val)
+    of "all": allFlag = true
+    of "unsafe-fs", "no-sandbox": unsafeFs = true
+    of "export-root": exportRootCli = val
+    of "import-root": importRootCli = val
+    of "allow-overwrite": allowOverwrite = true
+    of "key-pass": keyPass = val
+    of "here": hereFlag = true
+    of "help", "h": helpFlag = true
+    of "skip-existing", "skip": skipExisting = true
+    else:
+      let flag = if opt.len > 1 and opt[0] == '-': opt else: "--" & opt
+      unknownFlags.add(flag)
   for kind, key, val in getopt():
     case kind
     of cmdArgument:
       if expectValueFor.len > 0:
-        let k = expectValueFor
+        applyOpt(expectValueFor, key)
         expectValueFor = ""
-        case k
-        of "listen": listen = key
-        of "port":
-          port = parseInt(key)
-          remotePort = port
-        of "base": base = key
-        of "log": logLevel = key
-        of "host": host = key
-        of "remote-dir":
-          if mode == "export": remoteDest = key else: remoteSource = key
-        of "dest", "local-dir":
-          if mode == "import": localDest = key
-        of "rport": remotePort = parseInt(key)
-        of "export-root": exportRootCli = key
-        of "import-root": importRootCli = key
-        of "key-pass": keyPass = key
-        else:
-          let flag = "--" & k
-          unknownFlags.add(flag)
       else:
         if mode == "":
           if key == "help": helpFlag = true else: mode = key
@@ -304,44 +339,13 @@ proc main() =
           args.add(key)
     of cmdLongOption, cmdShortOption:
       let kcanon = key.replace('_', '-')
-      # Options that take a value; if none provided here, consume next argument
-      if kcanon in ["listen","port","base","log","host","remote-dir","dest","local-dir","rport","export-root","import-root","key-pass"]:
-        if val.len == 0:
-          expectValueFor = kcanon
-          continue
-      case kcanon
-      of "listen": listen = val
-      of "port":
-        port = parseInt(val)
-        remotePort = port
-      of "base": base = val
-      of "log": logLevel = val
-      of "version", "V": versionFlag = true
-      of "init": topInitFlag = true
-      of "force": topForceFlag = true
-      of "host": host = val
-      of "remote-dir":
-        if mode == "export": remoteDest = val
-        elif mode == "import": remoteSource = val
-        elif mode == "ls": remoteList = val
-      of "dest":
-        if mode == "import": localDest = val
-      of "local-dir":
-        if mode == "import": localDest = val
-      of "rport": remotePort = parseInt(val)
-      of "all": allFlag = true
-      of "unsafe-fs", "no-sandbox": unsafeFs = true
-      of "export-root": exportRootCli = val
-      of "import-root": importRootCli = val
-      of "allow-overwrite": allowOverwrite = true
-      of "key-pass": keyPass = val
-      of "here": hereFlag = true
-      of "help", "h": helpFlag = true
-      of "skip-existing", "skip": skipExisting = true
-      # Accept config-only flags here to avoid false positives; handled above / or top-level
+      if needsValue(kcanon) and val.len == 0:
+        expectValueFor = kcanon
+        continue
+      if needsValue(kcanon):
+        applyOpt(kcanon, val)
       else:
-        let flag = (if kind == cmdLongOption: "--" & kcanon else: "-" & kcanon)
-        unknownFlags.add(flag)
+        applyOpt(kcanon, "")
     of cmdEnd: discard
 
   # Handle options that were missing their value (e.g., --remote-dir without DIR)
@@ -360,16 +364,7 @@ proc main() =
 
   # Global/subcommand help
   if helpFlag:
-    case mode
-    of "serve": usageServe()
-    of "export": usageExport()
-    of "import": usageImport()
-    of "ls": usageLs()
-    of "config":
-      echo "depot config --init [--force]"
-      echo "  --init  Scaffold ~/.config/depot/depot.conf"
-      echo "  --force Overwrite existing config"
-    else: usage()
+    usageFor(mode)
     quit(0)
   # Report any unknown flags early (e.g., misspelled --here)
   if unknownFlags.len > 0:
@@ -378,16 +373,7 @@ proc main() =
       if i > 0: msg &= ", "
       msg &= f
     stderr.writeLine(msg)
-    case mode
-    of "serve": usageServe()
-    of "export": usageExport()
-    of "import": usageImport()
-    of "ls": usageLs()
-    of "config":
-      echo "depot config --init [--force]"
-      echo "  --init  Scaffold ~/.config/depot/depot.conf"
-      echo "  --force Overwrite existing config"
-    else: usage()
+    usageFor(mode)
     quit(1)
   case mode
   of "config":
