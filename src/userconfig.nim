@@ -5,8 +5,6 @@ type
     listen*: string
     port*: int
     base*: string
-    exportRoot*: string
-    importRoot*: string
     sandbox*: bool
     psk*: string
     requireClientAuth*: bool
@@ -31,8 +29,6 @@ proc readConfig*(): tuple[server: ServerDefaults, client: ClientDefaults] =
   result.server.listen = "0.0.0.0"
   result.server.port = 60006
   result.server.base = getEnv("XDG_DOWNLOAD_DIR", getEnv("HOME") / "Downloads")
-  result.server.exportRoot = ""
-  result.server.importRoot = ""
   result.server.sandbox = true
   result.server.psk = ""
   result.server.requireClientAuth = false
@@ -65,8 +61,6 @@ proc readConfig*(): tuple[server: ServerDefaults, client: ClientDefaults] =
         of "port":
           try: result.server.port = parseInt(e.value) except: discard
         of "base": result.server.base = e.value
-        of "exportroot": result.server.exportRoot = e.value
-        of "importroot": result.server.importRoot = e.value
         of "sandbox":
           result.server.sandbox = parseBool(e.value)
         of "psk": result.server.psk = e.value
