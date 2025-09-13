@@ -31,15 +31,15 @@ proc parseRemote*(s: string): (string, int, string) =
   let parts = s.split(':', maxsplit = 2)
   if parts.len == 2:
     if parts[0].len == 0 or parts[1].len == 0:
-      raise newException(CatchableError, "invalid remote spec")
+      raise newException(CatchableError, encodeClient(ecBadPath))
     return (parts[0], 60006, parts[1])
   elif parts.len == 3:
     if parts[0].len == 0 or parts[1].len == 0 or parts[2].len == 0:
-      raise newException(CatchableError, "invalid remote spec")
+      raise newException(CatchableError, encodeClient(ecBadPath))
     let port = try: parseInt(parts[1]) except: 60006
     return (parts[0], port, parts[2])
   else:
-    raise newException(CatchableError, "invalid remote spec")
+    raise newException(CatchableError, encodeClient(ecBadPath))
 
 proc openSession*(remote: string, port: int): Future[Session] {.async.} =
   ## Establish a TCP connection to 'remote:port' and complete the secure
@@ -49,7 +49,7 @@ proc openSession*(remote: string, port: int): Future[Session] {.async.} =
   try:
     await s.connect(remote, Port(port))
   except OSError as e:
-    raise newException(CatchableError, fmt"connect failed to {remote}:{port}: {e.msg}")
+    raise newException(CatchableError, encodeClient(ecOpenFail))
   # Phase: cryptographic handshake
   let id = fmt"{remote}:{port}"
   try:
@@ -73,16 +73,15 @@ proc uploadFile*(sess: Session, srcPath, relDest: string) {.async.} =
     await sess.sendRecord(UploadOpen.uint8, openPayload)
     let (t, payload) = await sess.recvRecord()
     if t == 0'u8:
-      raise newException(CatchableError, "connection closed by server during upload open")
+      raise newException(CatchableError, encodeClient(ecTimeout))
     if t == UploadFail.uint8:
       var ec = ecUnknown
       if payload.len == 1: ec = fromByte(payload[0])
       if ec == ecExists:
-        raise newException(UploadExists, errors.encodeClient(ec))
-      raise newException(CatchableError, errors.encodeClient(ec))
+        raise newException(UploadExists, encodeClient(ec))
+      raise newException(CatchableError, encodeClient(ec))
     if t != UploadOk.uint8:
-      raise newException(CatchableError, errors.encodeReason(
-          errors.reasonUnknown, "server refused upload"))
+      raise newException(CatchableError, encodeClient(ecUnknown))
 
   # Phase B: stream file data
   # Hasher for the current upload; used to compute checksum for FileClose
@@ -111,14 +110,13 @@ proc uploadFile*(sess: Session, srcPath, relDest: string) {.async.} =
     clearProgress()
     let (t, payload) = await sess.recvRecord()
     if t == 0'u8:
-      raise newException(CatchableError, "connection closed by server after file data")
+      raise newException(CatchableError, encodeClient(ecTimeout))
     if t == ErrorRec.uint8:
       var ec = ecUnknown
       if payload.len == 1: ec = fromByte(payload[0])
-      raise newException(CatchableError, errors.encodeClient(ec))
+      raise newException(CatchableError, encodeClient(ec))
     if t != UploadDone.uint8:
-      raise newException(CatchableError, errors.encodeReason(
-          errors.reasonUnknown, "upload failed to commit on server"))
+      raise newException(CatchableError, encodeClient(ecCommitFail))
 
   await openUpload(relDest, srcPath)
   # Opportunistic time-based rekey at file boundary
@@ -151,7 +149,6 @@ proc downloadFile*(sess: Session, relSrc, destPath: string) {.async.} =
   var receivedBytes: int64 = 0
   var accepted = false
   var skipped = false
-  var pendingErr = ""
   let startMs = nowMs()
 
   proc cleanupPartial() =
@@ -172,12 +169,11 @@ proc downloadFile*(sess: Session, relSrc, destPath: string) {.async.} =
     if fileExists(destPath):
       if sess.dlAck:
         var b: array[1, byte]
-        b[0] = byte(SkipReason.srExists)
+        b[0] = toByte(ecExists)
         await sess.sendRecord(PathSkip.uint8, b)
         skipped = true
-        pendingErr = fmt"{errFileExists}{destPath}"
       else:
-        raise newException(CatchableError, fmt"file exists: {destPath}")
+        raise newException(CatchableError, encodeClient(ecExists))
     else:
       # Prepare to receive and ack accept if negotiated
       outFile = open(common.partPath(destPath), fmWrite)
@@ -209,7 +205,7 @@ proc downloadFile*(sess: Session, relSrc, destPath: string) {.async.} =
         await sess.sendRecord(ErrorRec.uint8, @[toByte(ecChecksum)])
         cleanupPartial()
         clearProgress()
-        raise newException(CatchableError, fmt"checksum mismatch: {destPath}")
+        raise newException(CatchableError, encodeClient(ecChecksum))
       let dig = downloadHasher.digest()
       var match = dig.len == 32
       if match:
@@ -219,11 +215,11 @@ proc downloadFile*(sess: Session, relSrc, destPath: string) {.async.} =
         await sess.sendRecord(ErrorRec.uint8, @[toByte(ecChecksum)])
         cleanupPartial()
         clearProgress()
-        raise newException(CatchableError, fmt"checksum mismatch: {destPath}")
+        raise newException(CatchableError, encodeClient(ecChecksum))
       if fileExists(destPath):
         cleanupPartial()
         clearProgress()
-        raise newException(CatchableError, fmt"file exists: {destPath}")
+        raise newException(CatchableError, encodeClient(ecExists))
       moveFile(common.partPath(destPath), destPath)
       # Apply metadata
       try:
@@ -248,7 +244,7 @@ proc downloadFile*(sess: Session, relSrc, destPath: string) {.async.} =
     let (t, payload) = await sess.recvRecord()
     if t == 0'u8:
       cleanupPartial()
-      raise newException(CatchableError, "connection closed by server during download")
+      raise newException(CatchableError, encodeClient(ecTimeout))
     case t
     of uint8(PathOpen): await onPathOpen(payload)
     of uint8(FileData): onFileData(payload)
@@ -256,8 +252,8 @@ proc downloadFile*(sess: Session, relSrc, destPath: string) {.async.} =
       await onFileClose(payload)
       break
     of uint8(DownloadDone):
-      if skipped and pendingErr.len > 0:
-        raise newException(CatchableError, pendingErr)
+      if skipped:
+        raise newException(CatchableError, encodeClient(ecSkipped))
       break
     of uint8(ErrorRec): onServerError(payload)
     of uint8(RekeyReq):
@@ -299,13 +295,13 @@ proc uploadSingleFile(sess: Session, path: string, st: var UploadState) {.async.
     await uploadFile(sess, path, destRel)
     st.sentAllBytes += getFileSize(path)
     inc st.succeeded
-    echo fmt"done {path} ({formatBytes(getFileSize(path))})"
-  except UploadExists as e:
+    echo encodeClient(scUploaded) & " " & path
+  except UploadExists:
     if st.skipExisting:
-      echo fmt"skip existing {path}"
+      echo encodeClient(scSkipped) & " " & path
       inc st.skipped
     else:
-      stderr.writeLine(e.msg)
+      stderr.writeLine(encodeClient(ecExists))
       inc st.failed
   except CatchableError as e:
     stderr.writeLine(e.msg)
@@ -325,13 +321,13 @@ proc uploadDirTree(sess: Session, rootPath: string, st: var UploadState) {.async
       await uploadFile(sess, p, destRel)
       st.sentAllBytes += getFileSize(p)
       inc st.succeeded
-      echo fmt"done {p} ({formatBytes(getFileSize(p))})"
-    except UploadExists as e:
+      echo encodeClient(scUploaded) & " " & p
+    except UploadExists:
       if st.skipExisting:
-        echo fmt"skip existing {p}"
+        echo encodeClient(scSkipped) & " " & p
         inc st.skipped
       else:
-        stderr.writeLine(e.msg)
+        stderr.writeLine(encodeClient(ecExists))
         inc st.failed
     except CatchableError as e:
       stderr.writeLine(e.msg)
@@ -348,9 +344,9 @@ proc uploadPaths*(sess: Session, sources: seq[string], remoteDir: string,
   st.base = remoteDir.replace("\\", "/")
   if sess.srvSandboxed:
     if st.base.len > 0 and st.base[0] == '/':
-      raise newException(CatchableError, "absolute remote path not allowed in sandbox mode (use --no-sandbox on server)")
+      raise newException(CatchableError, encodeClient(ecAbsolute))
     if hasDotDot(st.base):
-      raise newException(CatchableError, "'..' path segments are not allowed in remote paths under sandbox mode")
+      raise newException(CatchableError, encodeClient(ecUnsafePath))
   if st.base.len == 0: st.base = "."
   if not st.base.endsWith("/"): st.base &= "/"
 
@@ -458,7 +454,7 @@ proc onFileClose(sess: Session, st: var DownloadState, payload: seq[byte]) {.asy
       await sess.sendRecord(ErrorRec.uint8, @[toByte(ecChecksum)])
       discard tryRemoveFile(common.partPath(st.targetPath))
       clearProgress()
-      raise newException(CatchableError, fmt"checksum mismatch: {st.targetPath}")
+      raise newException(CatchableError, encodeClient(ecChecksum))
     let dig2 = st.directoryDownloadHasher.digest()
     var match = dig2.len == 32
     if match:
@@ -468,11 +464,11 @@ proc onFileClose(sess: Session, st: var DownloadState, payload: seq[byte]) {.asy
       await sess.sendRecord(ErrorRec.uint8, @[toByte(ecChecksum)])
       discard tryRemoveFile(common.partPath(st.targetPath))
       clearProgress()
-      raise newException(CatchableError, fmt"checksum mismatch: {st.targetPath}")
+      raise newException(CatchableError, encodeClient(ecChecksum))
     if fileExists(st.targetPath):
       discard tryRemoveFile(fmt"{st.targetPath}.part")
       clearProgress()
-      raise newException(CatchableError, fmt"file exists: {st.targetPath}")
+      raise newException(CatchableError, encodeClient(ecExists))
     moveFile(common.partPath(st.targetPath), st.targetPath)
     # Apply metadata
     try:
@@ -505,11 +501,9 @@ proc downloadTo*(sess: Session, remotePath: string, localDest: string,
   let rp = remotePath.replace("\\", "/")
   if sess.srvSandboxed:
     if rp.len > 0 and rp[0] == '/':
-      raise newException(CatchableError,
-          "absolute remote path not allowed in sandbox mode (use --no-sandbox on server)")
+      raise newException(CatchableError, encodeClient(ecAbsolute))
     if hasDotDot(rp):
-      raise newException(CatchableError,
-          "'..' path segments are not allowed in remote paths under sandbox mode")
+      raise newException(CatchableError, encodeClient(ecUnsafePath))
   let srcNorm = rp
   let p = encodePathParam(srcNorm)
   await sess.sendRecord(DownloadOpen.uint8, p)
@@ -528,8 +522,7 @@ proc downloadTo*(sess: Session, remotePath: string, localDest: string,
       if st.fileOpen and st.partFile != nil:
         st.partFile.close()
         discard tryRemoveFile(fmt"{st.targetPath}.part")
-      raise newException(CatchableError,
-          "connection closed by server during directory download")
+      raise newException(CatchableError, encodeClient(ecTimeout))
     case t
     of uint8(PathOpen):
       let (relativePath, fileSize, mtimeU, perms) = parsePathOpen(payload)
@@ -542,9 +535,9 @@ proc downloadTo*(sess: Session, remotePath: string, localDest: string,
         await sess.sendRecord(PathSkip.uint8, b)
         st.skipCurrent = true
         if skipExisting:
-          echo fmt"skip existing {fullPath} ({formatBytes(fileSize)})"
+          echo encodeClient(scSkipped) & " " & fullPath
         else:
-          st.pendingErr = fmt"{errFileExists}{fullPath}"
+          raise newException(CatchableError, encodeClient(ecExists))
         continue
       else:
         await sess.sendRecord(PathAccept.uint8, newSeq[byte]())
@@ -554,9 +547,6 @@ proc downloadTo*(sess: Session, remotePath: string, localDest: string,
     of uint8(FileData): onFileData(sess, st, payload)
     of uint8(FileClose): await onFileClose(sess, st, payload)
     of uint8(DownloadDone):
-      if st.pendingErr.len > 0:
-        # Surface the local error after telling server to skip
-        raise newException(CatchableError, st.pendingErr)
       echo fmt"Transferred {st.fileCount} file(s), {formatBytes(st.receivedBytesAll)}"
       break
     of uint8(ErrorRec): onServerError(st, payload)
@@ -568,15 +558,15 @@ proc listRemote*(sess: Session, remotePath: string) {.async.} =
   let rp = remotePath.replace("\\", "/")
   if sess.srvSandboxed:
     if rp.len > 0 and rp[0] == '/':
-      raise newException(CatchableError, "absolute remote path not allowed in sandbox mode (use --no-sandbox on server)")
+      raise newException(CatchableError, encodeClient(ecAbsolute))
     if hasDotDot(rp):
-      raise newException(CatchableError, "'..' path segments are not allowed in remote paths under sandbox mode")
+      raise newException(CatchableError, encodeClient(ecUnsafePath))
   let req = encodePathParam(if rp.len == 0: "." else: rp)
   await sess.sendRecord(ListOpen.uint8, req)
   while true:
     let (t, payload) = await sess.recvRecord()
     if t == 0'u8:
-      raise newException(CatchableError, "connection closed by server during list")
+      raise newException(CatchableError, encodeClient(ecTimeout))
     case t
     of uint8(ListChunk):
       let items = parseListChunk(payload)
@@ -589,9 +579,8 @@ proc listRemote*(sess: Session, remotePath: string) {.async.} =
       # Server sends a single-byte error code for ErrorRec
       if payload.len == 1:
         let ec = fromByte(payload[0])
-        raise newException(CatchableError, errors.encodeClient(ec))
+        raise newException(CatchableError, encodeClient(ec))
       else:
-        raise newException(CatchableError, errors.encodeReason(
-            errors.reasonBadPayload, "invalid ErrorRec payload"))
+        raise newException(CatchableError, encodeClient(ecBadPayload))
     else:
       discard

@@ -3,19 +3,6 @@ import std/strutils
 when defined(posix): import posix
 when defined(windows): import winlean
 
-const
-  errBadPath* = "bad path"
-  errBadPayload* = "bad payload"
-  errUnsafePath* = "unsafe path: "
-  errAbsolutePathSandbox* = "absolute path not allowed in sandbox: "
-  errOpenFail* = "open fail"
-  errWriteFail* = "write fail"
-  errCommitFail* = "commit fail"
-  errFileExists* = "file exists: "
-  errReadFail* = "read fail"
-  errNotFound* = "not found: "
-  errChecksumMismatch* = "checksum mismatch"
-
 # Standard reason codes (short, for logs/protocol payloads)
 const
   reasonExists* = "exists"
@@ -31,12 +18,19 @@ const
   reasonReadFail* = "read-fail"
   reasonNotFound* = "not-found"
   reasonTimeout* = "timeout"
-  reasonUnknown* = "unknown"
   reasonChecksum* = "checksum"
   # Handshake/administrative categories
   reasonConfig* = "server-config"
   reasonCompat* = "compat"
   reasonAuth* = "auth"
+  reasonUnknown* = "unknown"
+
+  # Success reasons
+  reasonSuccess* = "success"
+  reasonUploaded* = "uploaded"
+  reasonDownloaded* = "downloaded"
+  reasonListed* = "listed"
+  reasonSkipped* = "skipped"
 
 type
   ErrorCode* = enum
@@ -58,6 +52,14 @@ type
     ecConfig
     ecCompat
     ecAuth
+    ecSkipped
+
+  SuccessCode* = enum
+    scSuccess = 128'u8 # Start success codes from 128 to avoid overlap with error codes
+    scUploaded
+    scDownloaded
+    scListed
+    scSkipped
 
 proc codeName*(c: ErrorCode): string =
   case c
@@ -78,59 +80,98 @@ proc codeName*(c: ErrorCode): string =
   of ecConfig: reasonConfig
   of ecCompat: reasonCompat
   of ecAuth: reasonAuth
+  of ecSkipped: reasonSkipped
   else: reasonUnknown
 
+proc codeName*(c: SuccessCode): string =
+  case c
+  of scUploaded: reasonUploaded
+  of scDownloaded: reasonDownloaded
+  of scListed: reasonListed
+  of scSkipped: reasonSkipped
+  else: reasonSuccess
+
 proc toByte*(c: ErrorCode): byte = byte(c)
+proc toByte*(c: SuccessCode): byte = byte(c)
+
 proc fromByte*(b: byte): ErrorCode =
   let v = uint8(b)
   if v <= uint8(high(ErrorCode)): ErrorCode(v) else: ecUnknown
 
 proc clientMessage*(c: ErrorCode): string =
   case c
-  of ecExists: "file exists on remote server"
-  of ecFilter: "skipped by filter"
-  of ecNoSpace: "no space left"
-  of ecPerms: "permission denied"
-  of ecAbsolute: "absolute path not allowed"
-  of ecUnsafePath: "unsafe path"
-  of ecBadPath: "bad path"
-  of ecBadPayload: "bad payload"
-  of ecOpenFail: "open failed"
-  of ecWriteFail: "write failed"
-  of ecReadFail: "read failed"
-  of ecNotFound: "item not found"
-  of ecTimeout: "timeout"
-  of ecChecksum: "checksum mismatch"
-  of ecConfig: "server misconfigured"
-  of ecCompat: "incompatible client/server"
-  of ecAuth: "authentication required or failed"
-  else: "error"
+  of ecExists: "File exists on remote server."
+  of ecFilter: "File skipped by filter."
+  of ecNoSpace: "No space left on device."
+  of ecPerms: "Permission denied."
+  of ecAbsolute: "Absolute paths are not allowed."
+  of ecUnsafePath: "Unsafe path detected."
+  of ecBadPath: "Invalid path specified."
+  of ecBadPayload: "Invalid data received from server."
+  of ecOpenFail: "Failed to open file."
+  of ecWriteFail: "Failed to write to file."
+  of ecReadFail: "Failed to read from file."
+  of ecNotFound: "File or directory not found."
+  of ecTimeout: "Connection timed out."
+  of ecChecksum: "File checksum mismatch."
+  of ecConfig: "Server is misconfigured."
+  of ecCompat: "Incompatible client/server version."
+  of ecAuth: "Authentication failed."
+  of ecSkipped: "File skipped."
+  else: "An unknown error occurred."
 
-proc serverMessage*(c: ErrorCode): string =
+proc serverMessage*(c: ErrorCode, detail: string = ""): string =
+  let baseMsg = case c
+    of ecExists: "Refusing to overwrite existing file."
+    of ecFilter: "File skipped by filter."
+    of ecNoSpace: "Disk full."
+    of ecPerms: "Access denied."
+    of ecAbsolute: "Absolute path rejected."
+    of ecUnsafePath: "Unsafe path rejected."
+    of ecBadPath: "Invalid path specified."
+    of ecBadPayload: "Invalid data received from client."
+    of ecOpenFail: "Failed to open file."
+    of ecWriteFail: "Failed to write to file."
+    of ecReadFail: "Failed to read from file."
+    of ecNotFound: "File or directory not found."
+    of ecTimeout: "Connection timed out."
+    of ecChecksum: "File checksum mismatch."
+    of ecConfig: "Server configuration error."
+    of ecCompat: "Feature or version mismatch."
+    of ecAuth: "Client authentication error."
+    of ecSkipped: "File skipped by client."
+    else: "An unknown error occurred."
+  if detail.len > 0:
+    baseMsg & " " & detail
+  else:
+    baseMsg
+
+proc clientMessage*(c: SuccessCode): string =
   case c
-  of ecExists: "refusing overwrite"
-  of ecFilter: "filtered"
-  of ecNoSpace: "disk full"
-  of ecPerms: "access denied"
-  of ecAbsolute: "absolute path not allowed"
-  of ecUnsafePath: "unsafe path rejected"
-  of ecBadPath: "bad path"
-  of ecBadPayload: "bad payload"
-  of ecOpenFail: "open failed"
-  of ecWriteFail: "write failed"
-  of ecReadFail: "read failed"
-  of ecNotFound: "not found"
-  of ecTimeout: "timeout"
-  of ecChecksum: "checksum mismatch"
-  of ecConfig: "server configuration error"
-  of ecCompat: "feature/version mismatch"
-  of ecAuth: "client authentication error"
-  else: "unknown"
+  of scUploaded: "File uploaded successfully."
+  of scDownloaded: "File downloaded successfully."
+  of scListed: "Directory listed successfully."
+  of scSkipped: "File skipped."
+  else: "Operation completed successfully."
+
+proc serverMessage*(c: SuccessCode, detail: string = ""): string =
+  let baseMsg = case c
+    of scUploaded: "File uploaded successfully."
+    of scDownloaded: "File downloaded successfully."
+    of scListed: "Directory listed successfully."
+    of scSkipped: "File skipped."
+    else: "Operation completed successfully."
+  if detail.len > 0:
+    baseMsg & " " & detail
+  else:
+    baseMsg
 
 import std/strformat
 
 proc encodeClient*(c: ErrorCode): string = fmt"[{codeName(c)}] {clientMessage(c)}"
-proc encodeServer*(c: ErrorCode): string = fmt"[{codeName(c)}] {serverMessage(c)}"
+proc encodeClient*(c: SuccessCode): string = fmt"[{codeName(c)}] {clientMessage(c)}"
+proc encodeServer*(c: ErrorCode, detail: string = ""): string = fmt"[{codeName(c)}] {serverMessage(c, detail)}"
+proc encodeServer*(c: SuccessCode, detail: string = ""): string = fmt"[{codeName(c)}] {serverMessage(c, detail)}"
 
 proc encodeReason*(code, message: string): string = fmt"[{code}] {message}"
 
@@ -143,37 +184,6 @@ proc splitReason*(msg: string): tuple[code, text: string] =
       let rest = msg[min(idx+2, msg.len) .. ^1]
       return (code, rest)
   ("", msg)
-
-proc reasonFromServerMsg*(msg: string): string =
-  ## Map a server error message to a short reason code.
-  ## Prefers a leading "[code] " prefix; falls back to heuristics.
-  let (code, _) = splitReason(msg)
-  if code.len > 0: return code
-  if msg.startsWith(errFileExists): return reasonExists
-  if msg.startsWith(errAbsolutePathSandbox): return reasonAbsolute
-  if msg.startsWith(errUnsafePath): return reasonUnsafePath
-  if msg.startsWith(errBadPath): return reasonBadPath
-  if msg.startsWith(errBadPayload): return reasonBadPayload
-  if msg.startsWith(errOpenFail): return reasonOpenFail
-  if msg.startsWith(errWriteFail): return reasonWriteFail
-  if msg.startsWith(errReadFail): return reasonReadFail
-  if msg.startsWith(errNotFound): return reasonNotFound
-  if msg.startsWith(errChecksumMismatch): return reasonChecksum
-  return reasonUnknown
-
-proc formatClientError*(msg: string): string =
-  ## Standardize client-facing error messages using structured reason codes.
-  ## If `msg` has a leading "[code] ", preserve it. Otherwise, infer a code
-  ## from known error prefixes and wrap: "[code] message".
-  let m = msg.strip()
-  if m.len > 2 and m[0] == '[':
-    return m
-  # Prefer mapping via known server/client message prefixes
-  let code = reasonFromServerMsg(m)
-  if code != reasonUnknown:
-    return encodeReason(code, m)
-  # Add a generic code for unclassified messages
-  return encodeReason(reasonUnknown, m)
 
 proc osErrorToCode*(e: ref OSError, fallback: ErrorCode): ErrorCode =
   ## Map platform-specific OSError codes to protocol ErrorCode variants.
