@@ -160,9 +160,3 @@ base = /home/user/Downloads
 - RekeyReq / RekeyAck: epoch rotation for traffic keys; epoch is included in AEAD associated data. Rekey occurs at file boundaries.
 
 Rekeying: A RekeyReq carries a 4-byte epoch. Both peers derive new traffic keys and 16-byte nonce prefixes from a per-session traffic secret and the epoch, reset sequence counters, and start using the new epoch (bound into AEAD AD). The current build triggers a rekey at file boundaries on a time interval by default (15 minutes).
-
-## Limitations / Future Work
-
-- Resume/retry across disconnects (manifest + ranges) not implemented yet.
-- QUIC transport is not included (stdlib‑only); TCP is used with an explicit record layer.
-- For the strongest containment guarantees, consider chroot/containers in addition to Depot’s app‑level share root checks.
