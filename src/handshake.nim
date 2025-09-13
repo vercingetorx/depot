@@ -98,7 +98,7 @@ proc encryptSecret*(plain: openArray[byte], pass: openArray[byte]): seq[byte] =
   let nb = urandom(24)
   var nonce: AeadNonce24
   for i in 0 ..< 24: nonce[i] = nb[i]
-  let ad = toSeqByte(dpkMagic)
+  let ad = toBytes(dpkMagic)
   let (ct, tag) = aeadEncrypt(key, nonce, plain, ad)
   var outp = newSeq[byte](4 + 4 + 16 + 24 + ct.len + 16)
   # magic
@@ -164,7 +164,7 @@ proc decryptSecret*(enc: openArray[byte], pass: openArray[byte]): tuple[
   var tag: array[16, byte]
   for i in 0 ..< 16: tag[i] = enc[idx+i]
   let key = kdfKey(pass, salt)
-  let ad = toSeqByte(dpkMagic)
+  let ad = toBytes(dpkMagic)
   let (ok, pt) = aeadDecrypt(key, nonce, ct, ad, tag)
   (ok, pt)
 
@@ -190,7 +190,7 @@ proc ensureServerIdentity*(): (PublicKey, SecretKey) =
     if serverKeyPassphrase.len == 0:
       raise newException(HandshakeError, encodeServer(ecConfig,
           "Encrypted server key requires --key-pass or --key-pass-file on server"))
-    let (ok, pt) = decryptSecret(skb, toSeqByte(serverKeyPassphrase))
+    let (ok, pt) = decryptSecret(skb, toBytes(serverKeyPassphrase))
     if not ok or pt.len != sk.len:
       raise newException(HandshakeError, encodeServer(ecAuth,
           "failed to decrypt server key"))
@@ -203,7 +203,7 @@ proc ensureServerIdentity*(): (PublicKey, SecretKey) =
           "No server key found; --key-pass or --key-pass-file is required to generate an encrypted key"))
     let (pk, sk) = generateKeypair()
     writeAllBytes(pkp, pk)
-    let enc = encryptSecret(sk, toSeqByte(serverKeyPassphrase))
+    let enc = encryptSecret(sk, toBytes(serverKeyPassphrase))
     writeAllBytes(skp, enc)
     return (pk, sk)
 
