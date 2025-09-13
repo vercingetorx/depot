@@ -1,5 +1,5 @@
 ## Handshake: TOFU identity pinning, Kyber KEM, Dilithium signatures, key derivation.
-import std/[asyncdispatch, asyncnet, json, logging, os, strutils, sysrand, times]
+import std/[asyncdispatch, asyncnet, json, logging, os, strutils, sysrand, strformat]
 import aead
 import varint
 import common
@@ -122,6 +122,21 @@ proc encryptSecret*(plain: openArray[byte], pass: openArray[byte]): seq[byte] =
   for i in 0 ..< 16: outp[idx+i] = tag[i]
   outp
 
+proc deriveRekey*(trafficSecret: array[32, byte], epochBytes: openArray[byte]): (array[48, byte], array[48, byte]) =
+  ## Derive two 48-byte key blocks for c2s and s2c using BLAKE2b
+  ## keyed by the session trafficSecret and epoch bytes.
+  var ctx1 = newBlake2bCtx(digestSize=48)
+  ctx1.update(trafficSecret); ctx1.update("c2s"); ctx1.update(epochBytes)
+  let out1 = ctx1.digest()
+  var ctx2 = newBlake2bCtx(digestSize=48)
+  ctx2.update(trafficSecret); ctx2.update("s2c"); ctx2.update(epochBytes)
+  let out2 = ctx2.digest()
+  var a1: array[48, byte]
+  var a2: array[48, byte]
+  for i in 0 ..< 48: a1[i] = out1[i]
+  for i in 0 ..< 48: a2[i] = out2[i]
+  (a1, a2)
+
 proc decryptSecret*(enc: openArray[byte], pass: openArray[byte]): tuple[ok: bool, plain: seq[byte]] =
   ## Decrypt DPK1-encrypted secret key with passphrase.
   if enc.len < 4 + 4 + 16 + 24 + 16: return (false, @[])
@@ -163,24 +178,20 @@ proc ensureServerIdentity*(): (PublicKey, SecretKey) =
     let skb = readAllBytes(skp)
     doAssert pkb.len == pk.len
     for i in 0 ..< pk.len: pk[i] = pkb[i]
-    # Secret: plaintext or DPK1-encrypted
-    var plainSk: seq[byte]
-    if skb.len >= 4 and char(skb[0]) == 'D' and char(skb[1]) == 'P' and char(skb[2]) == 'K' and char(skb[3]) == '1':
-      if serverKeyPassphrase.len == 0:
-        raise newException(HandshakeError, "Encrypted server key requires --key-pass on server")
-      let (ok, pt) = decryptSecret(skb, toBytes(serverKeyPassphrase))
-      if not ok or pt.len != sk.len:
-        raise newException(HandshakeError, "failed to decrypt server key")
-      plainSk = pt
-    else:
-      plainSk = skb
-    doAssert plainSk.len == sk.len
-    for i in 0 ..< sk.len: sk[i] = plainSk[i]
+    # Secret: require DPK1-encrypted key; plaintext is not allowed.
+    if not (skb.len >= 4 and char(skb[0]) == 'D' and char(skb[1]) == 'P' and char(skb[2]) == 'K' and char(skb[3]) == '1'):
+      raise newException(HandshakeError, "server key must be encrypted (DPK1); plaintext keys are not supported")
+    if serverKeyPassphrase.len == 0:
+      raise newException(HandshakeError, "Encrypted server key requires --key-pass or --key-pass-file on server")
+    let (ok, pt) = decryptSecret(skb, toBytes(serverKeyPassphrase))
+    if not ok or pt.len != sk.len:
+      raise newException(HandshakeError, "failed to decrypt server key")
+    for i in 0 ..< sk.len: sk[i] = pt[i]
     return (pk, sk)
   else:
     # New identity generation requires a passphrase so the key at rest is encrypted.
     if serverKeyPassphrase.len == 0:
-      raise newException(HandshakeError, "No server key found; --key-pass is required to generate an encrypted key")
+      raise newException(HandshakeError, "No server key found; --key-pass or --key-pass-file is required to generate an encrypted key")
     let (pk, sk) = generateKeypair()
     writeAllBytes(pkp, pk)
     let enc = encryptSecret(sk, toBytes(serverKeyPassphrase))
@@ -214,7 +225,7 @@ proc pinPath*(remoteId: string): string =
   ## Return path to the pinned server public key file for 'remoteId'.
   let dir = configDir() / "trust"
   ensureDirExists(dir)
-  dir / (remoteId & ".pk")
+  dir / fmt"{remoteId}.pk"
 
 proc loadPinned*(remoteId: string): (bool, PublicKey) =
   ## Load a pinned server public key for 'remoteId', if present.
@@ -388,7 +399,7 @@ proc clientHandshake*(sock: AsyncSocket, remoteId: string): Future[Session] {.as
   for i in 0 ..< 32: sess.trafficSecret[i] = tsec[i]
   sess.epoch = 0'u32
   sess.rekeyIntervalMs = 15 * 60 * 1000
-  sess.lastRekeyMs = int64(epochTime() * 1000)
+  sess.lastRekeyMs = common.monoMs()
   sess.pendingEpoch = 0'u32
   sess.ioTimeoutMs = 120000
   sess.srvSandboxed = srvSandbox
@@ -501,7 +512,7 @@ proc serverHandshake*(sock: AsyncSocket, srvSandboxed: bool): Future[Session] {.
     for i in 0 ..< 32: sess.trafficSecret[i] = tsec[i]
     sess.epoch = 0'u32
     sess.rekeyIntervalMs = 15 * 60 * 1000
-    sess.lastRekeyMs = int64(epochTime() * 1000)
+    sess.lastRekeyMs = common.monoMs()
     sess.pendingEpoch = 0'u32
     sess.ioTimeoutMs = 120000
     sess.srvSandboxed = srvSandboxed
