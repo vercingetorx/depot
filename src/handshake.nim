@@ -185,22 +185,18 @@ proc ensureServerIdentity*(): (PublicKey, SecretKey) =
     # Secret: require DPK1-encrypted key; plaintext is not allowed.
     if not (skb.len >= 4 and char(skb[0]) == 'D' and char(skb[1]) == 'P' and
         char(skb[2]) == 'K' and char(skb[3]) == '1'):
-      raise newException(HandshakeError, encodeServer(ecConfig,
-          "server key must be encrypted (DPK1); plaintext keys are not supported"))
+      raise newException(HandshakeError, encodeServer(ecConfig)) # "server key must be encrypted (DPK1); plaintext keys are not supported"
     if serverKeyPassphrase.len == 0:
-      raise newException(HandshakeError, encodeServer(ecConfig,
-          "Encrypted server key requires --key-pass or --key-pass-file on server"))
+      raise newException(HandshakeError, encodeServer(ecConfig)) # "Encrypted server key requires --key-pass or --key-pass-file on server"
     let (ok, pt) = decryptSecret(skb, toBytes(serverKeyPassphrase))
     if not ok or pt.len != sk.len:
-      raise newException(HandshakeError, encodeServer(ecAuth,
-          "failed to decrypt server key"))
+      raise newException(HandshakeError, encodeServer(ecAuth)) # "failed to decrypt server key"
     for i in 0 ..< sk.len: sk[i] = pt[i]
     return (pk, sk)
   else:
     # New identity generation requires a passphrase so the key at rest is encrypted.
     if serverKeyPassphrase.len == 0:
-      raise newException(HandshakeError, encodeServer(ecConfig,
-          "No server key found; --key-pass or --key-pass-file is required to generate an encrypted key"))
+      raise newException(HandshakeError, encodeServer(ecConfig)) # "No server key found; --key-pass or --key-pass-file is required to generate an encrypted key"
     let (pk, sk) = generateKeypair()
     writeAllBytes(pkp, pk)
     let enc = encryptSecret(sk, toBytes(serverKeyPassphrase))
@@ -470,7 +466,7 @@ proc serverHandshake*(sock: AsyncSocket, srvSandboxed: bool): Future[
         of reasonConfig: ec = ecConfig
         of reasonAuth: ec = ecAuth
         else: ec = ecUnknown
-        raise newException(HandshakeError, encodeServer(ec, text))
+        raise newException(HandshakeError, encodeServer(ec))
 
     # 1) Send SERVER_ID (Dilithium PK)
     await sendBlob(sock, 0x01, toSeq(signPk))
@@ -587,7 +583,7 @@ proc serverHandshake*(sock: AsyncSocket, srvSandboxed: bool): Future[
       await sendBlob(sock, 0x06'u8, @[toByte(ec)])
     except CatchableError:
       discard
-    raise newException(HandshakeError, encodeServer(ec, text))
+    raise newException(HandshakeError, encodeServer(ec))
   except CatchableError as e:
     try:
       await sendBlob(sock, 0x06'u8, @[toByte(ecUnknown)])
