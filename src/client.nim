@@ -329,10 +329,11 @@ proc uploadPaths*(sess: Session, sources: seq[string], remoteDir: string, skipEx
 
   proc uploadDirTree(rootPath: string) {.async.} =
     let root = absolutePath(rootPath)
+    let topName = extractFilename(root)
     for p in walkDirRec(rootPath):
       if dirExists(p): continue
-      let relativeSubpath = p[(root.len + (if root.endsWith(DirSep): 0 else: 1)) .. ^1]
-      let destRel = base & relativeSubpath.replace(DirSep, '/')
+      let relativeSubpath = p.relativePath(root)
+      let destRel = base & topName & "/" & relativeSubpath.replace(DirSep, '/')
       try:
         await uploadFile(sess, p, destRel)
         sentAllBytes += getFileSize(p)
