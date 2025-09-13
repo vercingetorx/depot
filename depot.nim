@@ -1,12 +1,12 @@
 ## CLI entrypoint: subcommand parsing and dispatch to server/client.
-import std/[os, strutils, parseopt, logging, asyncdispatch]
+import std/[os, strutils, parseopt, logging, asyncdispatch, strformat]
 import src/[client, handshake, server, userconfig]
 
 const version* = "0.1.0"
 # const commit* {.strdefine.}: string = "unknown"
 
 proc printVersion() =
-  echo "depot v" & version
+  echo fmt"depot v{version}"
 
 
 proc writeDefaultConfig(defaults: tuple[server: userconfig.ServerDefaults, client: userconfig.ClientDefaults], force: bool) =
@@ -17,26 +17,22 @@ proc writeDefaultConfig(defaults: tuple[server: userconfig.ServerDefaults, clien
     echo "Config already exists: ", path
     echo "Use --force to overwrite."
     return
-  let tpl = """# depot configuration
+  let tpl = fmt"""# depot configuration
 
 [Server]
 # listen = 0.0.0.0
 # port = 60006
-# base = """ & defaults.server.base & """
+# base = "{defaults.server.base}"
 # When sandbox = true (default), absolute paths from clients are rejected,
-# and all paths must resolve within the roots below.
+# and all paths must resolve within server-managed roots derived from --base.
 sandbox = true
 
-# Absolute roots for the server share (used in sandbox mode)
-# exportRoot = """ & defaults.server.base & "/depot/export" & "\n" &
-               "# importRoot = " & defaults.server.base & "/depot/import" & """
-
 [Client]
-""" &
-             ("# host = " & defaults.client.host & "\n" &
-              "# port = " & $defaults.client.port & "\n" &
-              "# log  = " & defaults.client.log & "\n" &
-              "# base = " & defaults.client.base & "\n")
+# host = {defaults.client.host}
+# port = {defaults.client.port}
+# log  = {defaults.client.log}
+# base = {defaults.client.base}
+"""
   writeFile(path, tpl)
   echo "Wrote config: ", path
 
@@ -59,12 +55,16 @@ proc usageServe() =
   echo "  --port N               TCP port to listen on"
   echo "  --base DIR             Base directory for default roots"
   echo "  --log LEVEL            Log level: debug|info|warn|error"
-  echo "  --unsafe-fs            Disable sandbox (allow absolute paths)"
-  echo "  --no-sandbox           Alias of --unsafe-fs"
-  echo "  --export-root DIR      Override export root (sandbox mode)"
-  echo "  --import-root DIR      Override import root (sandbox mode)"
+  echo "  --no-sandbox           Disable sandbox (allow absolute paths)"
   echo "  --allow-overwrite      Allow uploads to overwrite existing files"
   echo "  --key-pass PASS        Encrypt/load server key with this passphrase"
+  echo "  --key-pass-file PATH   Read key passphrase from file"
+  echo ""
+  echo "Key management:"
+  echo "  - First run requires a passphrase (\"--key-pass\" or \"--key-pass-file\") to"
+  echo "    generate and store an encrypted server key (DPK1)."
+  echo "  - Subsequent runs require the same passphrase to load the key."
+  echo "  - Plaintext server keys are not supported."
 
 proc usageConfig() =
   echo "depot config --init [--force]"
@@ -82,7 +82,7 @@ proc usageExport() =
   echo "  --skip-existing        Skip files that already exist on server"
   echo "  --log LEVEL            Log level: debug|info|warn|error"
   echo ""
-  echo "Sandboxed server: --remote-dir must be relative and maps under importRoot."
+  echo "Sandboxed server: --remote-dir must be relative to the server's upload area."
   echo "No-sandbox server: --remote-dir may be absolute."
 
 proc usageImport() =
@@ -98,7 +98,7 @@ proc usageImport() =
   echo "  --skip-existing        Skip local files that already exist"
   echo "  --log LEVEL            Log level: debug|info|warn|error"
   echo ""
-  echo "Sandboxed server: --remote-dir must be relative and maps under exportRoot."
+  echo "Sandboxed server: --remote-dir must be relative to the server's download area."
   echo "No-sandbox server: --remote-dir may be absolute."
 
 proc usageLs() =
@@ -109,7 +109,7 @@ proc usageLs() =
   echo "  --remote-dir DIR       Remote directory or file to list"
   echo "  --log LEVEL            Log level: debug|info|warn|error"
   echo ""
-  echo "Sandboxed server: --remote-dir must be relative and maps under exportRoot."
+  echo "Sandboxed server: --remote-dir must be relative to the server's download area."
   echo "No-sandbox server: --remote-dir may be absolute."
 
 proc usageFor(mode: string) =
@@ -146,7 +146,7 @@ proc runConfig(defaults: tuple[server: userconfig.ServerDefaults, client: userco
       of "force": force = true
       of "help", "h": helpFlag = true
       else:
-        let flag = (if kind == cmdLongOption: "--" & key else: "-" & key)
+        let flag = (if kind == cmdLongOption: fmt"--{key}" else: fmt"-{key}")
         unknownFlags.add(flag)
   if helpFlag:
     echo "depot config --init [--force]"
@@ -167,13 +167,24 @@ proc runConfig(defaults: tuple[server: userconfig.ServerDefaults, client: userco
   usage()
   return
 
-proc runServe(listen: string, port: int, baseDir: string, unsafeFs: bool, exportRootCli, importRootCli: string) =
+proc runServe(listen: string, port: int, baseDir: string, unsafeFs: bool) =
   ## Handle `depot serve` subcommand.
   # Phase: configure sandbox + overrides, then start accept loop
   server.sandboxed = not unsafeFs
-  if exportRootCli.len > 0: server.overrideExportRoot = exportRootCli
-  if importRootCli.len > 0: server.overrideImportRoot = importRootCli
-  info "server starting: listen=" & listen & ", port=" & $port & ", sandbox=" & $(server.sandboxed) & ", base=" & baseDir
+  # Preflight: ensure server identity is available before listening. This
+  # prevents starting a misconfigured server that would only fail on handshake.
+  try:
+    discard handshake.ensureServerIdentity()
+  except handshake.HandshakeError as e:
+    stderr.writeLine(e.msg)
+    quit(1)
+  # Preflight: ensure base/depot/export and base/depot/import exist
+  try:
+    discard server.ensureBaseDirs(baseDir)
+  except CatchableError as e:
+    stderr.writeLine(fmt"failed to prepare base directories: {e.msg}")
+    quit(1)
+  info fmt"server starting: listen={listen}, port={port}, sandbox={server.sandboxed}, base={baseDir}"
   asyncCheck server.serve(listen, port, baseDir)
   runForever()
 
@@ -274,8 +285,6 @@ proc main() =
   var localDest = defaults.client.base / "depot" / "import"
   var allFlag = false
   var unsafeFs = defaults.server.sandbox == false
-  var exportRootCli = ""
-  var importRootCli = ""
   var hereFlag = false
   var helpFlag = false
   var skipExisting = false
@@ -284,6 +293,7 @@ proc main() =
   var topInitFlag = false
   var topForceFlag = false
   var keyPass = ""
+  var keyPassFilePath = ""
   var unknownFlags: seq[string]
   var expectValueFor = ""
   # Option helpers to DRY up parsing/apply logic
@@ -292,7 +302,7 @@ proc main() =
     case opt
     of "listen", "port", "base", "log", "host",
        "remote-dir", "dest", "local-dir", "rport",
-       "export-root", "import-root", "key-pass": true
+       "key-pass", "key-pass-file": true
     else: false
 
   proc applyOpt(opt: string, val: string) =
@@ -315,16 +325,15 @@ proc main() =
       if mode == "import": localDest = val
     of "rport": remotePort = parseInt(val)
     of "all": allFlag = true
-    of "unsafe-fs", "no-sandbox": unsafeFs = true
-    of "export-root": exportRootCli = val
-    of "import-root": importRootCli = val
+    of "no-sandbox": unsafeFs = true
     of "allow-overwrite": allowOverwrite = true
     of "key-pass": keyPass = val
+    of "key-pass-file": keyPassFilePath = val
     of "here": hereFlag = true
     of "help", "h": helpFlag = true
     of "skip-existing", "skip": skipExisting = true
     else:
-      let flag = if opt.len > 1 and opt[0] == '-': opt else: "--" & opt
+      let flag = if opt.len > 1 and opt[0] == '-': opt else: fmt"--{opt}"
       unknownFlags.add(flag)
   for kind, key, val in getopt():
     case kind
@@ -350,7 +359,7 @@ proc main() =
 
   # Handle options that were missing their value (e.g., --remote-dir without DIR)
   if expectValueFor.len > 0:
-    unknownFlags.add("--" & expectValueFor & " (missing value)")
+    unknownFlags.add(fmt"--{expectValueFor} (missing value)")
 
   setupLogging(logLevel)
   # Global version
@@ -368,20 +377,24 @@ proc main() =
     quit(0)
   # Report any unknown flags early (e.g., misspelled --here)
   if unknownFlags.len > 0:
-    var msg = "Unknown option(s): "
-    for i, f in unknownFlags:
-      if i > 0: msg &= ", "
-      msg &= f
+    let msg = "Unknown option(s): " & unknownFlags.join(", ")
     stderr.writeLine(msg)
     usageFor(mode)
     quit(1)
+  # If a passphrase file was specified, load it now (unless --key-pass already set)
+  if keyPass.len == 0 and keyPassFilePath.len > 0:
+    try:
+      keyPass = readFile(keyPassFilePath).strip()
+    except CatchableError as e:
+      stderr.writeLine(fmt"failed to read --key-pass-file: {keyPassFilePath}: {e.msg}")
+      quit(1)
   case mode
   of "config":
     runConfig(defaults)
   of "serve":
     server.allowOverwrite = allowOverwrite
     handshake.serverKeyPassphrase = keyPass
-    runServe(listen, port, base, unsafeFs, exportRootCli, importRootCli)
+    runServe(listen, port, base, unsafeFs)
   of "export":
     runExport(args, hereFlag, allFlag, remoteDest, skipExisting, defaults, host, remotePort)
   of "import":
