@@ -24,6 +24,7 @@ const
   reasonConfig* = "server-config"
   reasonCompat* = "compat"
   reasonAuth* = "auth"
+  ecCommitFail* = "server failed to commit"
 
 type
   ErrorCode* = enum
@@ -45,6 +46,7 @@ type
     ecConfig
     ecCompat
     ecAuth
+    ecCommitFail
 
 proc codeName*(c: ErrorCode): string =
   case c
@@ -65,6 +67,7 @@ proc codeName*(c: ErrorCode): string =
   of ecConfig: reasonConfig
   of ecCompat: reasonCompat
   of ecAuth: reasonAuth
+  of ecCommitFail: reasonCommitFail
   else: reasonUnknown
 
 proc toByte*(c: ErrorCode): byte = byte(c)
