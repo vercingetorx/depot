@@ -66,7 +66,7 @@ proc readVarint(s: Session): Future[uint64] {.async.} =
       if varintBuf.len > 10:
         raise newException(RecordFormatError, "invalid varint length header")
 
-proc buildNonce(prefix: array[16, byte], seq: uint64): AeadNonce24 =
+proc buildNonce(prefix: array[16, byte], seq: uint64): AeadNonce24 {.inline.} =
   ## Construct a 24-byte nonce as prefix||seq (little-endian).
   for i in 0 ..< 16: result[i] = prefix[i]
   var s = seq
