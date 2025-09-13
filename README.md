@@ -37,7 +37,7 @@ Note: For the strongest containment guarantees, deploy the server in a chroot/co
 Requires Nim 2.x.
 
 ```
-nim c -d:release src/depot.nim
+nim c -d:release depot.nim
 ```
 
 ## Quick Start
@@ -45,7 +45,7 @@ nim c -d:release src/depot.nim
 1) Scaffold a config (optional but recommended):
 
 ```
-depot config --init
+depot --init
 ```
 
 Edit `~/.config/depot/depot.conf` to set server/client defaults (see below).
