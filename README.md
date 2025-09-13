@@ -1,3 +1,5 @@
+# WIP
+
 # Depot — Secure File Transfer (Kyber + XChaCha20)
 
 Depot is a simple, post‑quantum‑ready file transfer tool. It favors a clean CLI, strong defaults, and explicit safety:
