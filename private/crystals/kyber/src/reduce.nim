@@ -15,7 +15,7 @@ proc montgomery_reduce*(a: int32): int16 =
   ## C: t = (int16_t)a * QINV; t = (a - (int32)t * q) >> 16;
   let t16 = trunc16(trunc16(a).int32 * QINV.int32)
   let r = a - int32(t16) * KYBER_Q.int32
-  result = int16(r shr 16)   # arithmetic right shift on signed int32
+  result = int16(r shr 16) # arithmetic right shift on signed int32
 
 proc barrett_reduce*(a: int16): int16 =
   ## Centered representative of a mod q in [-(q-1)/2, ..., (q-1)/2].

@@ -36,7 +36,7 @@ const
   # Handshake/administrative categories
   reasonConfig* = "server-config"
   reasonCompat* = "compat"
-  reasonAuth*   = "auth"
+  reasonAuth* = "auth"
 
 type
   ErrorCode* = enum
@@ -183,6 +183,8 @@ proc osErrorToCode*(e: ref OSError, fallback: ErrorCode): ErrorCode =
     if c == EACCES or c == EPERM: return ecPerms
   elif defined(windows):
     let c = int32(e.errorCode)
-    if c == ERROR_DISK_FULL.int32 or c == ERROR_HANDLE_DISK_FULL.int32: return ecNoSpace
-    if c == ERROR_ACCESS_DENIED.int32 or c == ERROR_WRITE_PROTECT.int32 or c == ERROR_SHARING_VIOLATION.int32: return ecPerms
+    if c == ERROR_DISK_FULL.int32 or c ==
+        ERROR_HANDLE_DISK_FULL.int32: return ecNoSpace
+    if c == ERROR_ACCESS_DENIED.int32 or c == ERROR_WRITE_PROTECT.int32 or c ==
+        ERROR_SHARING_VIOLATION.int32: return ecPerms
   return fallback

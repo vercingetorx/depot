@@ -1,6 +1,6 @@
 ## CLI entrypoint: subcommand parsing and dispatch to server/client.
 import std/[os, strutils, parseopt, logging, asyncdispatch, strformat]
-import src/[client, handshake, server, userconfig]
+import src/[client, handshake, server, userconfig, usage]
 
 const version* = "0.1.0"
 # const commit* {.strdefine.}: string = "unknown"
@@ -9,7 +9,8 @@ proc printVersion() =
   echo fmt"depot v{version}"
 
 
-proc writeDefaultConfig(defaults: tuple[server: userconfig.ServerDefaults, client: userconfig.ClientDefaults], force: bool) =
+proc writeDefaultConfig(defaults: tuple[server: userconfig.ServerDefaults,
+    client: userconfig.ClientDefaults], force: bool) =
   let path = userconfig.configPath()
   let confDir = splitFile(path).dir
   discard existsOrCreateDir(confDir)
@@ -36,91 +37,6 @@ sandbox = true
   writeFile(path, tpl)
   echo "Wrote config: ", path
 
-proc usage() =
-  echo "depot: secure file transfer (Kyber + XChaCha20-Poly1305)"
-  echo "usage:"
-  echo "  depot --version"
-  echo "  depot --init [--force]"
-  echo "  depot serve [--help]"
-  echo "  depot export [--help]"
-  echo "  depot import [--help]"
-  echo "  depot ls [--help]"
-  echo "  depot config --init [--force]          # scaffold ~/.config/depot/depot.conf"
-  echo ""
-  echo "Use 'depot <subcommand> --help' to see all options."
-
-proc usageServe() =
-  echo "depot serve [options]"
-  echo "  --listen IP            Bind address (default from config)"
-  echo "  --port N               TCP port to listen on"
-  echo "  --base DIR             Base directory for default roots"
-  echo "  --log LEVEL            Log level: debug|info|warn|error"
-  echo "  --no-sandbox           Disable sandbox (allow absolute paths)"
-  echo "  --allow-overwrite      Allow uploads to overwrite existing files"
-  echo "  --key-pass PASS        Encrypt/load server key with this passphrase"
-  echo "  --key-pass-file PATH   Read key passphrase from file"
-  echo ""
-  echo "Key management:"
-  echo "  - First run requires a passphrase (\"--key-pass\" or \"--key-pass-file\") to"
-  echo "    generate and store an encrypted server key (DPK1)."
-  echo "  - Subsequent runs require the same passphrase to load the key."
-  echo "  - Plaintext server keys are not supported."
-
-proc usageConfig() =
-  echo "depot config --init [--force]"
-  echo "  --init  Scaffold ~/.config/depot/depot.conf"
-  echo "  --force Overwrite existing config"
-
-proc usageExport() =
-  echo "depot export FILE... [options]"
-  echo "  --host HOST            Server host"
-  echo "  --port N               Server port (alias: --rport)"
-  echo "  --rport N              Server port"
-  echo "  --remote-dir DIR       Remote base directory (see below)"
-  echo "  --here                 Resolve FILE relative to current directory"
-  echo "  --all                  Export the entire default export root"
-  echo "  --skip-existing        Skip files that already exist on server"
-  echo "  --log LEVEL            Log level: debug|info|warn|error"
-  echo ""
-  echo "Sandboxed server: --remote-dir must be relative to the server's upload area."
-  echo "No-sandbox server: --remote-dir may be absolute."
-
-proc usageImport() =
-  echo "depot import ITEM... [options]"
-  echo "  --host HOST            Server host"
-  echo "  --port N               Server port (alias: --rport)"
-  echo "  --rport N              Server port"
-  echo "  --remote-dir DIR       Remote base directory (see below)"
-  echo "  --dest LOCAL_DIR       Local destination directory"
-  echo "  --local-dir LOCAL_DIR  Alias of --dest"
-  echo "  --here                 Use current directory as destination"
-  echo "  --all                  Import entire tree from remote source ('.')"
-  echo "  --skip-existing        Skip local files that already exist"
-  echo "  --log LEVEL            Log level: debug|info|warn|error"
-  echo ""
-  echo "Sandboxed server: --remote-dir must be relative to the server's download area."
-  echo "No-sandbox server: --remote-dir may be absolute."
-
-proc usageLs() =
-  echo "depot ls [options]"
-  echo "  --host HOST            Server host"
-  echo "  --port N               Server port (alias: --rport)"
-  echo "  --rport N              Server port"
-  echo "  --remote-dir DIR       Remote directory or file to list"
-  echo "  --log LEVEL            Log level: debug|info|warn|error"
-  echo ""
-  echo "Sandboxed server: --remote-dir must be relative to the server's download area."
-  echo "No-sandbox server: --remote-dir may be absolute."
-
-proc usageFor(mode: string) =
-  case mode
-  of "serve": usageServe()
-  of "export": usageExport()
-  of "import": usageImport()
-  of "ls": usageLs()
-  of "config": usageConfig()
-  else: usage()
-
 proc setupLogging(level: string) =
   ## Configure console logger with a consistent format and chosen level.
   var h = newConsoleLogger()
@@ -133,7 +49,8 @@ proc setupLogging(level: string) =
   of "error": setLogFilter(lvlError)
   else: setLogFilter(lvlInfo)
 
-proc runConfig(defaults: tuple[server: userconfig.ServerDefaults, client: userconfig.ClientDefaults]) =
+proc runConfig(defaults: tuple[server: userconfig.ServerDefaults,
+    client: userconfig.ClientDefaults]) =
   ## Handle `depot config` subcommand. Currently supports `--init` and `--force`.
   var doInit = false
   var force = false
@@ -164,7 +81,7 @@ proc runConfig(defaults: tuple[server: userconfig.ServerDefaults, client: userco
   if doInit:
     writeDefaultConfig(defaults, force)
     return
-  usage()
+  usage.usage()
   return
 
 proc runServe(listen: string, port: int, baseDir: string, unsafeFs: bool) =
@@ -190,7 +107,8 @@ proc runServe(listen: string, port: int, baseDir: string, unsafeFs: bool) =
 
 proc runExport(argsIn: var seq[string], hereFlag, allFlag: bool,
                remoteDest: string, skipExisting: bool,
-               defaults: tuple[server: userconfig.ServerDefaults, client: userconfig.ClientDefaults],
+               defaults: tuple[server: userconfig.ServerDefaults,
+                   client: userconfig.ClientDefaults],
                host: string, remotePort: int) =
   ## Handle `depot export` subcommand. Resolves paths based on flags and defaults,
   ## opens a session, and performs upload(s).
@@ -199,7 +117,8 @@ proc runExport(argsIn: var seq[string], hereFlag, allFlag: bool,
   try:
     if args.len == 0:
       if allFlag:
-        let srcRoot = if hereFlag: getCurrentDir() else: defaults.client.base / "depot" / "export"
+        let srcRoot = if hereFlag: getCurrentDir() else: defaults.client.base /
+            "depot" / "export"
         args = @[srcRoot]
       elif hereFlag:
         args = @[getCurrentDir()]
@@ -212,7 +131,8 @@ proc runExport(argsIn: var seq[string], hereFlag, allFlag: bool,
         for a in args:
           if a.len > 0 and a[0] == DirSep:
             resolved.add(a)
-          elif a.len >= 2 and a[0] == '.' and (a[1] == DirSep or (a.len >= 3 and a[1] == '.' and a[2] == DirSep)):
+          elif a.len >= 2 and a[0] == '.' and (a[1] == DirSep or (a.len >= 3 and
+              a[1] == '.' and a[2] == DirSep)):
             resolved.add(a)
           else:
             resolved.add(baseExport / a)
@@ -246,7 +166,8 @@ proc runImport(args: seq[string], hereFlag, allFlag: bool,
     # Phase 2: open session and download
     var sess = waitFor client.openSession(host, remotePort)
     for item in items:
-      let remotePath = if remoteSource.len > 0: (remoteSource / item).replace("\\", "/") else: item
+      let remotePath = if remoteSource.len > 0: (remoteSource / item).replace(
+          "\\", "/") else: item
       waitFor client.downloadTo(sess, remotePath, localDest, skipExisting)
   except CatchableError as e:
     stderr.writeLine(e.msg)
@@ -256,7 +177,8 @@ proc runImport(args: seq[string], hereFlag, allFlag: bool,
     quit(1)
 
 proc runLs(remotePath: string,
-            defaults: tuple[server: userconfig.ServerDefaults, client: userconfig.ClientDefaults],
+            defaults: tuple[server: userconfig.ServerDefaults,
+                client: userconfig.ClientDefaults],
             host: string, remotePort: int) =
   ## Handle `depot ls` subcommand. Lists files remotely without copying.
   try:
@@ -269,7 +191,7 @@ proc runLs(remotePath: string,
     stderr.writeLine(e.msg)
     quit(1)
 
-proc main() =
+proc parseAndRun() =
   let defaults = userconfig.readConfig()
   var listen = defaults.server.listen
   var port = defaults.server.port
@@ -373,13 +295,13 @@ proc main() =
 
   # Global/subcommand help
   if helpFlag:
-    usageFor(mode)
+    usage.usageFor(mode)
     quit(0)
   # Report any unknown flags early (e.g., misspelled --here)
   if unknownFlags.len > 0:
     let msg = "Unknown option(s): " & unknownFlags.join(", ")
     stderr.writeLine(msg)
-    usageFor(mode)
+    usage.usageFor(mode)
     quit(1)
   # If a passphrase file was specified, load it now (unless --key-pass already set)
   if keyPass.len == 0 and keyPassFilePath.len > 0:
@@ -398,15 +320,16 @@ proc main() =
   of "export":
     runExport(args, hereFlag, allFlag, remoteDest, skipExisting, defaults, host, remotePort)
   of "import":
-    runImport(args, hereFlag, allFlag, remoteSource, localDest, host, remotePort, skipExisting)
+    runImport(args, hereFlag, allFlag, remoteSource, localDest, host,
+        remotePort, skipExisting)
   of "ls":
     runLs(remoteList, defaults, host, remotePort)
   else:
-    usage()
+    usage.usage()
 
 when isMainModule:
   try:
-    main()
+    parseAndRun()
   except CatchableError as e:
     stderr.writeLine(e.msg)
     quit(1)

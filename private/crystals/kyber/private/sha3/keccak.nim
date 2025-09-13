@@ -25,7 +25,7 @@ proc keccakFunction*(state: var array[25, uint64], rounds: byte)
 
 proc storeU64LE(dst: ptr array[KECCAK_F1600_STATE, uint8], src: uint64, index: int) =
   dst[][index + 0] = byte(src)
-  dst[][index + 1] = byte(src shr  8)
+  dst[][index + 1] = byte(src shr 8)
   dst[][index + 2] = byte(src shr 16)
   dst[][index + 3] = byte(src shr 24)
   dst[][index + 4] = byte(src shr 32)
@@ -35,8 +35,8 @@ proc storeU64LE(dst: ptr array[KECCAK_F1600_STATE, uint8], src: uint64, index: i
 
 
 proc loadU64LE(src: ptr array[KECCAK_F1600_STATE, uint8], index: int): uint64 =
-  result = uint64(src[][index + 0])        or
-           uint64(src[][index + 1]) shl  8 or
+  result = uint64(src[][index + 0]) or
+           uint64(src[][index + 1]) shl 8 or
            uint64(src[][index + 2]) shl 16 or
            uint64(src[][index + 3]) shl 24 or
            uint64(src[][index + 4]) shl 32 or
@@ -118,7 +118,8 @@ proc keccakFinish*(self: var KeccakState, padding: uint8) =
   self.validBytes = uint32(self.rate)
 
 
-proc keccakSqueeze*(self: var KeccakState, output: var openArray[byte], length: int, padding: uint8): int =
+proc keccakSqueeze*(self: var KeccakState, output: var openArray[byte],
+    length: int, padding: uint8): int =
   if output.len == 0:
     return ERR_NULL
 
@@ -149,7 +150,8 @@ proc keccakSqueeze*(self: var KeccakState, output: var openArray[byte], length: 
   return SUCCESS
 
 
-proc keccakDigest*(state: var KeccakState, digest: var openArray[byte], len: int, padding: uint8): int =
+proc keccakDigest*(state: var KeccakState, digest: var openArray[byte],
+    len: int, padding: uint8): int =
   if digest.len == 0:
     return ERR_NULL
 
@@ -244,10 +246,10 @@ proc keccakFunction*(state: var array[25, uint64], rounds: byte) =
 
   let startRound = if rounds == 24: 0 else: 12
 
-  for i in startRound ..<  KECCAK_ROUNDS:
+  for i in startRound ..< KECCAK_ROUNDS:
     #[ NOTE:
-        Uses temporary variables and loop unrolling to
-        avoid array indexing and inner loops overhead
+      Uses temporary variables and loop unrolling to
+      avoid array indexing and inner loops overhead
     ]#
 
     # NOTE: prepare column parity for Theta step
@@ -258,53 +260,53 @@ proc keccakFunction*(state: var array[25, uint64], rounds: byte) =
     c4 = a4 xor a9 xor a14 xor a19 xor a24
 
     # NOTE: Theta + Rho + Pi steps
-    d   = c4 xor rotateLeftBits(c1, 1)
-    b0  = d xor a0
-    b16 = rotateLeftBits(d xor a5,  ROT_01)
-    b7  = rotateLeftBits(d xor a10, ROT_02)
+    d = c4 xor rotateLeftBits(c1, 1)
+    b0 = d xor a0
+    b16 = rotateLeftBits(d xor a5, ROT_01)
+    b7 = rotateLeftBits(d xor a10, ROT_02)
     b23 = rotateLeftBits(d xor a15, ROT_03)
     b14 = rotateLeftBits(d xor a20, ROT_04)
 
-    d   = c0 xor rotateLeftBits(c2, 1)
-    b10 = rotateLeftBits(d xor a1,  ROT_05)
-    b1  = rotateLeftBits(d xor a6,  ROT_06)
+    d = c0 xor rotateLeftBits(c2, 1)
+    b10 = rotateLeftBits(d xor a1, ROT_05)
+    b1 = rotateLeftBits(d xor a6, ROT_06)
     b17 = rotateLeftBits(d xor a11, ROT_07)
-    b8  = rotateLeftBits(d xor a16, ROT_08)
+    b8 = rotateLeftBits(d xor a16, ROT_08)
     b24 = rotateLeftBits(d xor a21, ROT_09)
 
-    d   = c1 xor rotateLeftBits(c3, 1)
-    b20 = rotateLeftBits(d xor a2,  ROT_10)
-    b11 = rotateLeftBits(d xor a7,  ROT_11)
-    b2  = rotateLeftBits(d xor a12, ROT_12)
+    d = c1 xor rotateLeftBits(c3, 1)
+    b20 = rotateLeftBits(d xor a2, ROT_10)
+    b11 = rotateLeftBits(d xor a7, ROT_11)
+    b2 = rotateLeftBits(d xor a12, ROT_12)
     b18 = rotateLeftBits(d xor a17, ROT_13)
-    b9  = rotateLeftBits(d xor a22, ROT_14)
+    b9 = rotateLeftBits(d xor a22, ROT_14)
 
-    d   = c2 xor rotateLeftBits(c4, 1)
-    b5  = rotateLeftBits(d xor a3,  ROT_15)
-    b21 = rotateLeftBits(d xor a8,  ROT_16)
+    d = c2 xor rotateLeftBits(c4, 1)
+    b5 = rotateLeftBits(d xor a3, ROT_15)
+    b21 = rotateLeftBits(d xor a8, ROT_16)
     b12 = rotateLeftBits(d xor a13, ROT_17)
-    b3  = rotateLeftBits(d xor a18, ROT_18)
+    b3 = rotateLeftBits(d xor a18, ROT_18)
     b19 = rotateLeftBits(d xor a23, ROT_19)
 
-    d   = c3 xor rotateLeftBits(c0, 1)
-    b15 = rotateLeftBits(d xor a4,  ROT_20)
-    b6  = rotateLeftBits(d xor a9,  ROT_21)
+    d = c3 xor rotateLeftBits(c0, 1)
+    b15 = rotateLeftBits(d xor a4, ROT_20)
+    b6 = rotateLeftBits(d xor a9, ROT_21)
     b22 = rotateLeftBits(d xor a14, ROT_22)
     b13 = rotateLeftBits(d xor a19, ROT_23)
-    b4  = rotateLeftBits(d xor a24, ROT_24)
+    b4 = rotateLeftBits(d xor a24, ROT_24)
 
     # NOTE: Chi + Iota steps
-    a0  = b0  xor (not b1 and b2) xor roundConstants[i]
-    a1  = b1  xor (not b2 and b3)
-    a2  = b2  xor (not b3 and b4)
-    a3  = b3  xor (not b4 and b0)
-    a4  = b4  xor (not b0 and b1)
+    a0 = b0 xor (not b1 and b2) xor roundConstants[i]
+    a1 = b1 xor (not b2 and b3)
+    a2 = b2 xor (not b3 and b4)
+    a3 = b3 xor (not b4 and b0)
+    a4 = b4 xor (not b0 and b1)
 
-    a5  = b5  xor (not b6 and b7)
-    a6  = b6  xor (not b7 and b8)
-    a7  = b7  xor (not b8 and b9)
-    a8  = b8  xor (not b9 and b5)
-    a9  = b9  xor (not b5 and b6)
+    a5 = b5 xor (not b6 and b7)
+    a6 = b6 xor (not b7 and b8)
+    a7 = b7 xor (not b8 and b9)
+    a8 = b8 xor (not b9 and b5)
+    a9 = b9 xor (not b5 and b6)
 
     a10 = b10 xor (not b11 and b12)
     a11 = b11 xor (not b12 and b13)
@@ -324,16 +326,16 @@ proc keccakFunction*(state: var array[25, uint64], rounds: byte) =
     a23 = b23 xor (not b24 and b20)
     a24 = b24 xor (not b20 and b21)
 
-  state[0]  = a0
-  state[1]  = a1
-  state[2]  = a2
-  state[3]  = a3
-  state[4]  = a4
-  state[5]  = a5
-  state[6]  = a6
-  state[7]  = a7
-  state[8]  = a8
-  state[9]  = a9
+  state[0] = a0
+  state[1] = a1
+  state[2] = a2
+  state[3] = a3
+  state[4] = a4
+  state[5] = a5
+  state[6] = a6
+  state[7] = a7
+  state[8] = a8
+  state[9] = a9
   state[10] = a10
   state[11] = a11
   state[12] = a12

@@ -44,13 +44,15 @@ proc shake128_finalize*(st: var KeccakState) =
 proc shake256_finalize*(st: var KeccakState) =
   keccakFinish(st, SHAKE_PADDING)
 
-proc shake128_squeezeblocks*(output: var openArray[byte], outBlocks: int, st: var KeccakState) =
+proc shake128_squeezeblocks*(output: var openArray[byte], outBlocks: int,
+    st: var KeccakState) =
   ## Squeeze exactly outBlocks * SHAKE128_RATE bytes.
   let total = outBlocks * SHAKE128_RATE
   doAssert output.len >= total
   discard keccakSqueeze(st, output, total, SHAKE_PADDING)
 
-proc shake256_squeezeblocks*(output: var openArray[byte], outBlocks: int, st: var KeccakState) =
+proc shake256_squeezeblocks*(output: var openArray[byte], outBlocks: int,
+    st: var KeccakState) =
   ## Squeeze exactly outBlocks * SHAKE256_RATE bytes.
   let total = outBlocks * SHAKE256_RATE
   doAssert output.len >= total
@@ -86,14 +88,18 @@ proc dilithium_shake256_stream_init*(state: var KeccakState,
 
 # --- Convenience aliases used elsewhere in the port ---
 
-proc stream128_init*(state: var Stream128State, seed: openArray[byte], nonce: uint16) =
+proc stream128_init*(state: var Stream128State, seed: openArray[byte],
+    nonce: uint16) =
   dilithium_shake128_stream_init(state, seed, nonce)
 
-proc stream256_init*(state: var Stream256State, seed: openArray[byte], nonce: uint16) =
+proc stream256_init*(state: var Stream256State, seed: openArray[byte],
+    nonce: uint16) =
   dilithium_shake256_stream_init(state, seed, nonce)
 
-proc stream128_squeezeblocks*(output: var openArray[byte], outBlocks: int, state: var Stream128State) =
+proc stream128_squeezeblocks*(output: var openArray[byte], outBlocks: int,
+    state: var Stream128State) =
   shake128_squeezeblocks(output, outBlocks, state)
 
-proc stream256_squeezeblocks*(output: var openArray[byte], outBlocks: int, state: var Stream256State) =
+proc stream256_squeezeblocks*(output: var openArray[byte], outBlocks: int,
+    state: var Stream256State) =
   shake256_squeezeblocks(output, outBlocks, state)

@@ -1,10 +1,11 @@
-proc blamka(v00, v01, v02, v03, v04, v05, v06, v07, v08, v09, v10, v11, v12, v13, v14, v15: var Word) =
+proc blamka(v00, v01, v02, v03, v04, v05, v06, v07, v08, v09, v10, v11, v12,
+    v13, v14, v15: var Word) =
   #[
     BlaMka: optimized data mixing operation for Argon2
     + designed to increase the computational cost in a way
     that is resistant to optimization by parallel computing hardware.
   ]#
-  
+
   v00 = v00 + v04 + 2*uint64(uint32(v00))*uint64(uint32(v04))
   v12 = v12 xor v00
   v12 = v12 shr 32 or v12 shl 32
@@ -12,7 +13,7 @@ proc blamka(v00, v01, v02, v03, v04, v05, v06, v07, v08, v09, v10, v11, v12, v13
   v04 = v04 xor v08
   v04 = v04 shr 24 or v04 shl 40
 
-  v00 = v00 +  v04 + 2*uint64(uint32(v00))*uint64(uint32(v04))
+  v00 = v00 + v04 + 2*uint64(uint32(v00))*uint64(uint32(v04))
   v12 = v12 xor v00
   v12 = v12 shr 16 or v12 shl 48
   v08 = v08 + v12 + 2*uint64(uint32(v08))*uint64(uint32(v12))
@@ -134,19 +135,19 @@ proc processBlockGeneric(dest: var Block, in1, in2: Block, doXOR: bool) =
   # NOTE: row-wise processing
   for i in countup(0, blockSize.pred, 16):
     blamka(
-      t[i],    t[i+1],  t[i+2],  t[i+3],
-      t[i+4],  t[i+5],  t[i+6],  t[i+7],
-      t[i+8],  t[i+9],  t[i+10], t[i+11],
+      t[i], t[i+1], t[i+2], t[i+3],
+      t[i+4], t[i+5], t[i+6], t[i+7],
+      t[i+8], t[i+9], t[i+10], t[i+11],
       t[i+12], t[i+13], t[i+14], t[i+15]
     )
 
   # NOTE: column-wise processing
   for i in countup(0, int(blockSize/8).pred, 2):
     blamka(
-      t[i],     t[i+1],      t[i+16],  t[i+16+1],
-      t[i+32],  t[i+32+1],   t[i+48],  t[i+48+1],
-      t[i+64],  t[i+64+1],   t[i+80],  t[i+80+1],
-      t[i+96],  t[i+96+1],   t[i+112], t[i+112+1]
+      t[i], t[i+1], t[i+16], t[i+16+1],
+      t[i+32], t[i+32+1], t[i+48], t[i+48+1],
+      t[i+64], t[i+64+1], t[i+80], t[i+80+1],
+      t[i+96], t[i+96+1], t[i+112], t[i+112+1]
     )
 
   # NOTE: final XOR (helps ensure non-linearity)

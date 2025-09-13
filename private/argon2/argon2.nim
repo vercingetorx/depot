@@ -84,8 +84,8 @@ const
   # NOTE: synchronization points are specific positions in the algorithm's execution where the memory
   # state is synchronized across different computational threads or lanes.
   syncPoints: uint32 = 4
-  Argon2_Version_1_3: int = 0x13    # 19 in decimal
-  Argon2_Version_1_2_1: int = 0x10  # 16 in decimal
+  Argon2_Version_1_3: int = 0x13 # 19 in decimal
+  Argon2_Version_1_2_1: int = 0x10 # 16 in decimal
 
 type
   Word = uint64
@@ -98,10 +98,10 @@ type
     salt: seq[byte]
     secret: seq[byte]
     assocData: seq[byte]
-    memoryCost: uint32        # memory cost (in kibibytes)
-    timeCost: uint32          # time cost (number of iterations)
-    parallelism: uint32       # degree of parallelism (number of threads)
-    digestSize: uint32        # desired length of the final hash
+    memoryCost: uint32  # memory cost (in kibibytes)
+    timeCost: uint32    # time cost (number of iterations)
+    parallelism: uint32 # degree of parallelism (number of threads)
+    digestSize: uint32  # desired length of the final hash
     version: int
     mode: Mode
   Argon2Ctx = object
@@ -116,10 +116,11 @@ include blamka
 
 proc validateArgon2Params(params: Argon2Params) =
   if not (params.parallelism > 0 and params.parallelism <= (1 shl 24) - 1):
-   raise newException(ValueError, "Parallelism must be between 1 and 2^24 - 1")
+    raise newException(ValueError, "Parallelism must be between 1 and 2^24 - 1")
 
   # NOTE: must be a power of 2 greater than 1
-  if not (params.memoryCost >= 8 * params.parallelism and params.memoryCost <= (1 shl 32) - 1):
+  if not (params.memoryCost >= 8 * params.parallelism and params.memoryCost <= (
+      1 shl 32) - 1):
     raise newException(ValueError, "Memory cost must be between 8 * parallelism and 2^32 - 1")
 
   if not (params.timeCost > 0 and params.timeCost <= (1 shl 32) - 1):
@@ -145,9 +146,9 @@ proc toBytesLE(value: uint32): seq[byte] =
 proc bytesToBlock(bytes: seq[byte]): Block =
   # NOTE: input byte sequence must be 1024 bytes long for Block conversion
   var word: Word
-  for i in 0 ..< blockSize:  # 128 Words (uint64) in a Block
+  for i in 0 ..< blockSize: # 128 Words (uint64) in a Block
     word = 0
-    for j in 0 ..< 8:  # 8 bytes in a Word
+    for j in 0 ..< 8: # 8 bytes in a Word
       word = word or (Word(bytes[i * 8 + j]) shl (j * 8))
     result[i] = word
   return result
@@ -156,7 +157,7 @@ proc bytesToBlock(bytes: seq[byte]): Block =
 proc blockToBytes(blk: Block): seq[byte] =
   result = newSeq[byte](blockSizeInBytes)
   for i, word in blk:
-    for j in 0 ..< 8:  # 8 bytes in a Word
+    for j in 0 ..< 8: # 8 bytes in a Word
       result[i * 8 + j] = byte((word shr (j * 8)) and 0xFF)
 
 ##########################################################################
@@ -179,7 +180,7 @@ proc HPrime(input: seq[byte], digestSize: uint32): seq[byte] =
     blake2bCtx.update(toBytesLE(digestSize) & input)
     V = blake2bCtx.digest()
     copyMem(addr result[0], addr V[0], 32)
-    
+
     # NOTE: intermediate hashing (extending)
     var remaining = digestSize - 32
     var offset: uint32 = 32
@@ -207,7 +208,7 @@ proc initArgon2Params(
   timeCost, memoryCost, parallelism, digestSize, version: int,
   mode: Mode
 ): Argon2Params =
-  
+
   result.password = toSeq(password)
   result.salt = toSeq(salt)
   result.secret = toSeq(secret)
@@ -243,7 +244,7 @@ proc initHash(params: Argon2Params): seq[byte] =
   blake2bCtx.update(toBytesLE(uint32(params.assocData.len)))
   if params.assocData.len > 0:
     blake2bCtx.update(params.assocData)
- 
+
   return blake2bCtx.digest()
 
 
@@ -251,11 +252,12 @@ proc initMemoryArray(params: var Argon2Params): MemoryArray =
   var mPrime = params.memoryCost
 
   # NOTE: adjust memory cost to be a multiple of syncPoints * parallelism
-  mPrime = mPrime div (syncPoints * params.parallelism) * (syncPoints * params.parallelism)
+  mPrime = mPrime div (syncPoints * params.parallelism) * (syncPoints *
+      params.parallelism)
   if mPrime < 2 * syncPoints * params.parallelism:
     mPrime = 2 * syncPoints * params.parallelism
   params.memoryCost = mPrime
-  
+
   # NOTE: initialize memory array with adjusted number of blocks (cost)
   result = newSeq[Block](params.memoryCost)
   # NOTE: zeroing the memory is not necessary as Nim initializes with zeros by default
@@ -281,13 +283,13 @@ proc initBlocks(ctx: var Argon2Ctx, h0: seq[byte]) =
     # NOTE: convert the lane number to bytes in little-endian format and add to extended hash
     bts = toBytesLE(lane)
     copyMem(addr modifiedH0[blake2bMaxDigestSize + 4], addr bts[0], bts.len)
-    
+
     # NOTE: add block index 0 to the extended hash -> compute the block -> update memory
     bts = toBytesLE(uint32(0))
     copyMem(addr modifiedH0[blake2bMaxDigestSize], addr bts[0], bts.len)
     blk = bytesToBlock(HPrime(modifiedH0, uint32(blockSizeInBytes)))
     ctx.memory[][laneOffset + 0] = blk
-    
+
     # NOTE: repeat for block index 1
     bts = toBytesLE(uint32(1))
     copyMem(addr modifiedH0[blake2bMaxDigestSize], addr bts[0], bts.len)
@@ -327,7 +329,8 @@ proc phi(rand, m, s: uint64; lane, lanes: uint32): uint32 =
   return lane * lanes + uint32((s + m - (p + 1)) mod lanes)
 
 
-proc indexAlpha(rand: uint64; lanes, segments, threads, n, slice, lane, index: uint32): uint32 =
+proc indexAlpha(rand: uint64; lanes, segments, threads, n, slice, lane,
+    index: uint32): uint32 =
   #[
     computes a reference index within a lane
     
@@ -347,7 +350,7 @@ proc indexAlpha(rand: uint64; lanes, segments, threads, n, slice, lane, index: u
   # NOTE: first slice of the first pass
   if n == 0 and slice == 0:
     refLane = lane
-  
+
   # NOTE: calculate base modifier
   var m = 3 * segments
   # NOTE: calculate start point
@@ -355,14 +358,14 @@ proc indexAlpha(rand: uint64; lanes, segments, threads, n, slice, lane, index: u
   # NOTE: adjust m if the current lane is the reference lane
   if lane == refLane:
     m += index
-  
+
   # NOTE: first pass
   if n == 0:
     m = slice * segments
     s = 0
     if slice == 0 or lane == refLane:
       m += index
-  
+
   # NOTE: adjust m for the first index or if in the reference lane
   if index == 0 or lane == refLane:
     m -= 1
@@ -370,11 +373,14 @@ proc indexAlpha(rand: uint64; lanes, segments, threads, n, slice, lane, index: u
   return phi(rand, uint64(m), uint64(s), refLane, lanes)
 
 
-proc processSegment(params: tuple[memory: ptr MemoryArray, n, slice, lane, lanes, segments, parallelism, memoryCost, timeCost: uint32, mode: Mode]) {.thread.} =
+proc processSegment(params: tuple[memory: ptr MemoryArray, n, slice, lane,
+    lanes, segments, parallelism, memoryCost, timeCost: uint32,
+    mode: Mode]) {.thread.} =
   ## processes a single segment of a lane in the memory array
   var addresses, input, zero: Block
   # NOTE: initialize the input block for Argon2i or first half of Argon2id
-  if params.mode == ARGON2I or (params.mode == ARGON2ID and params.n == 0 and params.slice < syncPoints div 2):
+  if params.mode == ARGON2I or (params.mode == ARGON2ID and params.n == 0 and
+      params.slice < syncPoints div 2):
     input[0] = uint64(params.n)
     input[1] = uint64(params.lane)
     input[2] = uint64(params.slice)
@@ -401,9 +407,10 @@ proc processSegment(params: tuple[memory: ptr MemoryArray, n, slice, lane, lanes
     if index == 0 and params.slice == 0:
       # NOTE: select last block in lane
       prev += params.lanes
-    
+
     # NOTE: generate pseudo-random values for indexing (mode dependant)
-    if params.mode == ARGON2I or (params.mode == ARGON2ID and params.n == 0 and params.slice < syncPoints div 2):
+    if params.mode == ARGON2I or (params.mode == ARGON2ID and params.n == 0 and
+        params.slice < syncPoints div 2):
       if int(index) mod blockSize == 0:
         # NOTE: refresh the address block periodically
         inc input[6]
@@ -413,12 +420,14 @@ proc processSegment(params: tuple[memory: ptr MemoryArray, n, slice, lane, lanes
     else:
       # NOTE: for Argon2d and second half of Argon2id, use the previous block's first word
       random = params.memory[][prev][0]
-    
+
     # NOTE: calculate the index of the new block to reference
-    let newOffset = indexAlpha(random, params.lanes, params.segments, params.parallelism, params.n, params.slice, params.lane, index)
+    let newOffset = indexAlpha(random, params.lanes, params.segments,
+        params.parallelism, params.n, params.slice, params.lane, index)
     # NOTE: XOR the current block with the referenced block and the previous block
-    processBlockXOR(params.memory[][offset], params.memory[][prev], params.memory[][newOffset])
-    
+    processBlockXOR(params.memory[][offset], params.memory[][prev],
+        params.memory[][newOffset])
+
     inc index
     inc offset
 
@@ -428,19 +437,23 @@ proc processBlocks(ctx: Argon2Ctx) =
   let lanes = ctx.params.memoryCost div ctx.params.parallelism
   let segments = lanes div syncPoints
 
-  var threads = newSeq[Thread[tuple[memory: ptr MemoryArray, n, slice, lane, lanes, segments, parallelism, memoryCost, timeCost: uint32, mode: Mode]]](ctx.params.parallelism)
+  var threads = newSeq[Thread[tuple[memory: ptr MemoryArray, n, slice, lane,
+      lanes, segments, parallelism, memoryCost, timeCost: uint32, mode: Mode]]](
+      ctx.params.parallelism)
 
   for n in 0 ..< ctx.params.timeCost:
     for slice in 0 ..< syncPoints:
       for lane in 0 ..< ctx.params.parallelism:
-        createThread(threads[lane], processSegment, (ctx.memory, n, slice, lane, lanes, segments, ctx.params.parallelism, ctx.params.memoryCost, ctx.params.timeCost, ctx.params.mode))
+        createThread(threads[lane], processSegment, (ctx.memory, n, slice, lane,
+            lanes, segments, ctx.params.parallelism, ctx.params.memoryCost,
+            ctx.params.timeCost, ctx.params.mode))
       joinThreads(threads)
 
 ##########################################################################
 
 proc base64Encode[T](data: openarray[T]): string =
   ## convenience proc
-  return data.encode().strip(leading=false, chars={'='})
+  return data.encode().strip(leading = false, chars = {'='})
 
 
 proc digest*(ctx: Argon2Ctx): seq[byte] =
@@ -448,7 +461,7 @@ proc digest*(ctx: Argon2Ctx): seq[byte] =
   # NOTE: number of blocks in each lane
   let lanes = ctx.params.memoryCost div ctx.params.parallelism
   var xorFinalBlock: Block
- 
+
   for lane in 0 ..< ctx.params.parallelism:
     let blockIndex = lane * lanes + lanes.pred
     # NOTE: first lane -> init xorFinalBlock
@@ -489,7 +502,7 @@ proc newArgon2Ctx*(
   memoryCost: Positive = 16,
   parallelism: Positive = 1,
   digestSize: Positive = 32,
-  version: Positive = Argon2_Version_1_3, 
+  version: Positive = Argon2_Version_1_3,
   mode: Mode = ARGON2ID
 ): Argon2Ctx =
 
@@ -502,16 +515,16 @@ proc newArgon2Ctx*(
   )
 
   validateArgon2Params(result.params)
-  
+
   # NOTE: create initial hash based on input parameters
   let h0 = initHash(result.params)
 
   result.mArray = initMemoryArray(result.params)
   result.memory = addr result.mArray
-  
+
   # NOTE: initialize first two blocks in each lane
   result.initBlocks(h0)
-  
+
   # NOTE: fill the memory array in parallel
   result.processBlocks()
 
@@ -523,10 +536,10 @@ proc newArgon2Ctx*(
   memoryCost: Positive = 16,
   parallelism: Positive = 1,
   digestSize: Positive = 32,
-  version: Positive = Argon2_Version_1_3, 
+  version: Positive = Argon2_Version_1_3,
   mode: Mode = ARGON2ID
 ): Argon2Ctx =
-  
+
   return newArgon2Ctx(
     password.toOpenArrayByte(0, password.len.pred),
     salt.toOpenArrayByte(0, salt.len.pred),
@@ -534,6 +547,6 @@ proc newArgon2Ctx*(
     assocData.toOpenArrayByte(0, assocData.len.pred),
     timeCost, memoryCost, parallelism,
     digestSize,
-    version, 
+    version,
     mode
   )

@@ -16,10 +16,10 @@ proc crypto_sign_keypair*(pk: var openArray[byte],
   doAssert pk.len == CRYPTO_PUBLICKEYBYTES
   doAssert sk.len == CRYPTO_SECRETKEYBYTES
 
-  var rho:      array[SEEDBYTES, byte]
-  var rhoprime: array[CRHBYTES,  byte]
-  var key:      array[SEEDBYTES, byte]
-  var tr:       array[TRBYTES,   byte]
+  var rho: array[SEEDBYTES, byte]
+  var rhoprime: array[CRHBYTES, byte]
+  var key: array[SEEDBYTES, byte]
+  var tr: array[TRBYTES, byte]
 
   # seedbuf <- random(SEEDBYTES) ++ [K,L], expand via SHAKE256 → rho|rhoprime|key
   var seedInput: array[SEEDBYTES + 2, byte]
@@ -53,7 +53,7 @@ proc crypto_sign_keypair*(pk: var openArray[byte],
 
   # Split (power2round), pack pk, derive tr = SHAKE256(pk), then pack sk
   polyveck_caddq(t1)
-  polyveck_power2round(t1, t0, t1)       # t1=high, t0=low
+  polyveck_power2round(t1, t0, t1) # t1=high, t0=low
   pack_pk(pk, rho, t1)
 
   var trctx = newShake256Ctx(pk)
@@ -68,7 +68,7 @@ proc crypto_sign_signature_internal*(sig: var openArray[byte],
                                      siglen: var uint,
                                      m: openArray[byte],
                                      pre: openArray[byte],
-                                     rnd: openArray[byte],   # RNDBYTES
+                                     rnd: openArray[byte], # RNDBYTES
                                      sk: openArray[byte]): int =
   ## Computes signature (internal API). Returns 0 on success.
   doAssert sig.len == CRYPTO_BYTES
@@ -76,11 +76,11 @@ proc crypto_sign_signature_internal*(sig: var openArray[byte],
 
   # Unpack sk -> rho, tr, key, t0, s1, s2
   var rho: array[SEEDBYTES, byte]
-  var tr:  array[TRBYTES,   byte]
+  var tr: array[TRBYTES, byte]
   var key: array[SEEDBYTES, byte]
-  var t0:  Polyveck
-  var s1:  Polyvecl
-  var s2:  Polyveck
+  var t0: Polyveck
+  var s1: Polyvecl
+  var s2: Polyveck
   unpack_sk(rho, tr, key, t0, s1, s2, sk)
 
   # mu = CRH(tr, pre, m) using SHAKE256
@@ -228,9 +228,9 @@ proc crypto_sign*(sm: var openArray[byte],
 
   var sigLen: uint = 0
   let ret = crypto_sign_signature(
-    sm.toOpenArray(0, CRYPTO_BYTES - 1),  # write detached sig in place
+    sm.toOpenArray(0, CRYPTO_BYTES - 1),         # write detached sig in place
     sigLen,
-    m,                                    # sign the message directly
+    m,                                           # sign the message directly
     ctx, sk
   )
   smlen = sigLen + uint(m.len)
@@ -247,7 +247,7 @@ proc crypto_sign_verify_internal*(sig: openArray[byte],
 
   # Unpack pk and sig
   var rho: array[SEEDBYTES, byte]
-  var t1:  Polyveck
+  var t1: Polyveck
   unpack_pk(rho, t1, pk)
 
   var ctilde: array[CTILDEBYTES, byte]
@@ -259,7 +259,7 @@ proc crypto_sign_verify_internal*(sig: openArray[byte],
   # mu = CRH(H(rho, t1), pre, m)
   var tr: array[TRBYTES, byte]
   block:
-    var ctx = newShake256Ctx(pk)  # pk = (rho || t1) packed
+    var ctx = newShake256Ctx(pk) # pk = (rho || t1) packed
     ctx.read(tr)
   var mu: array[CRHBYTES, byte]
   block:
@@ -340,8 +340,8 @@ proc crypto_sign_open*(m: var openArray[byte],
 
   mlen = uint(sm.len - CRYPTO_BYTES)
   let ok = crypto_sign_verify(
-    sm.toOpenArray(0, CRYPTO_BYTES - 1),       # sig
-    sm.toOpenArray(CRYPTO_BYTES, sm.len - 1),  # msg
+    sm.toOpenArray(0, CRYPTO_BYTES - 1),                      # sig
+    sm.toOpenArray(CRYPTO_BYTES, sm.len - 1),                 # msg
     ctx, pk
   ) == 0
 

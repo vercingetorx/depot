@@ -130,9 +130,11 @@ proc recvRecord*(s: Session): Future[(uint8, seq[byte])] {.async.} =
     associatedData.add(putUvar(uint64(s.seqRx)))
     associatedData.add(putUvar(uint64(s.epoch)))
     let nonce = buildNonce(s.pRx, s.seqRx)
-    let (authOk, plaintext) = aeadDecrypt(s.kRx, nonce, ciphertext, associatedData, tag)
+    let (authOk, plaintext) = aeadDecrypt(s.kRx, nonce, ciphertext,
+        associatedData, tag)
     if not authOk:
-      error "recvRecord: AEAD authentication failed (type=", rtype, ", seq=", s.seqRx, ")"
+      error "recvRecord: AEAD authentication failed (type=", rtype, ", seq=",
+          s.seqRx, ")"
       return (0'u8, @[])
     # Phase: advance sequence and return
     inc s.seqRx
@@ -144,7 +146,8 @@ proc recvRecord*(s: Session): Future[(uint8, seq[byte])] {.async.} =
     error "recvRecord: ", e.msg
     return (0'u8, @[])
 
-proc encodePathOpen*(relativePath: string, fileSize: int64, modificationTimeUnix: int64, permissions: set[FilePermission]): seq[byte] =
+proc encodePathOpen*(relativePath: string, fileSize: int64,
+    modificationTimeUnix: int64, permissions: set[FilePermission]): seq[byte] =
   ## Encode PathOpen payload for a single file announcement on the stream:
   ## varint(pathLen) | path | varint(fileSize) | varint(mtimeUnix) | varint(count) | ordinals[count]
   var buf = putUvar(uint64(relativePath.len))
@@ -162,7 +165,9 @@ proc encodePathOpen*(relativePath: string, fileSize: int64, modificationTimeUnix
     copyMem(addr buf[buf.high - ords.len + 1], unsafeAddr ords[0], ords.len)
   buf
 
-proc parsePathOpen*(payload: openArray[byte]): tuple[relativePath: string, fileSize: int64, modificationTimeUnix: int64, permissions: set[FilePermission]] =
+proc parsePathOpen*(payload: openArray[byte]): tuple[relativePath: string,
+    fileSize: int64, modificationTimeUnix: int64, permissions: set[
+    FilePermission]] =
   ## Decode PathOpen payload (required metadata fields present):
   ## varint(pathLen) | path | varint(fileSize) | varint(mtimeUnix) | varint(count) | ordinals[count]
   var offset = 0
@@ -210,7 +215,8 @@ proc encodePathParam*(path: string): seq[byte] =
   buf.add(toBytes(path))
   buf
 
-proc decodePathParam*(data: openArray[byte], offset: int = 0): tuple[path: string, next: int] =
+proc decodePathParam*(data: openArray[byte], offset: int = 0): tuple[
+    path: string, next: int] =
   ## Decode varint(len) | path from data starting at offset.
   ## Returns (path, nextIndex). If invalid/truncated, returns next = -1.
   let (lenU, next1) =
@@ -224,7 +230,8 @@ proc decodePathParam*(data: openArray[byte], offset: int = 0): tuple[path: strin
   let p = fromBytes(data[next1 ..< next1 + plen])
   (p, next1 + plen)
 
-proc encodeUploadOpen*(relativePath: string, modificationTimeUnix: int64, permissions: set[FilePermission]): seq[byte] =
+proc encodeUploadOpen*(relativePath: string, modificationTimeUnix: int64,
+    permissions: set[FilePermission]): seq[byte] =
   ## Encode UploadOpen payload:
   ## varint(pathLen) | path | varint(mtimeUnix) | varint(count) | ordinals[count]
   var buf = putUvar(uint64(relativePath.len))
@@ -240,7 +247,8 @@ proc encodeUploadOpen*(relativePath: string, modificationTimeUnix: int64, permis
     copyMem(addr buf[buf.high - ords.len + 1], unsafeAddr ords[0], ords.len)
   buf
 
-proc parseUploadOpen*(payload: openArray[byte]): tuple[relativePath: string, modificationTimeUnix: int64, permissions: set[FilePermission]] =
+proc parseUploadOpen*(payload: openArray[byte]): tuple[relativePath: string,
+    modificationTimeUnix: int64, permissions: set[FilePermission]] =
   ## Decode UploadOpen payload (required metadata):
   ## varint(pathLen) | path | varint(mtimeUnix) | varint(count) | ordinals[count]
   var off = 0
@@ -278,7 +286,8 @@ proc encodeListItem*(relativePath: string, fileSize: int64, kind: uint8): seq[by
   b[b.high] = byte(kind)
   b
 
-proc parseListChunk*(payload: openArray[byte]): seq[tuple[relativePath: string, fileSize: int64, kind: uint8]] =
+proc parseListChunk*(payload: openArray[byte]): seq[tuple[relativePath: string,
+    fileSize: int64, kind: uint8]] =
   ## Parse a sequence of list items from a payload buffer. Returns a list
   ## of (relativePath, fileSize, kind), ignoring any trailing malformed item.
   var off = 0

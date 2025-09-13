@@ -54,7 +54,7 @@ proc newShake128Ctx*(data: openArray[byte] = @[]): Shake128Ctx =
   ## shake128 XOF
   result.digestSize = DigestSize
   result.padding = Padding
-  
+
   result.state = keccakInit(DigestSize, Rounds)
 
   if data.len > 0:

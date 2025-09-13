@@ -43,7 +43,7 @@ proc newSha3_512Ctx*(data: openArray[byte] = @[]): Sha3_512Ctx =
   result.blockSize = BlockSize
   result.digestSize = DigestSize
   result.padding = Padding
-  
+
   result.state = keccakInit(DigestSize + DigestSize, Rounds)
 
   if data.len > 0:

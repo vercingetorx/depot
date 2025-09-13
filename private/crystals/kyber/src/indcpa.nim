@@ -86,7 +86,8 @@ static:
     "gen_matrix assumes XOF_BLOCKBYTES is a multiple of 3"
 
 const GEN_MATRIX_NBLOCKS* =
-  ((12*KYBER_N div 8 * (1 shl 12) div KYBER_Q) + XOF_BLOCKBYTES) div XOF_BLOCKBYTES
+  ((12*KYBER_N div 8 * (1 shl 12) div KYBER_Q) +
+      XOF_BLOCKBYTES) div XOF_BLOCKBYTES
 
 proc gen_matrix(a: var array[KYBER_K, PolyVec];
                 seed: openArray[byte];
@@ -131,16 +132,18 @@ proc indcpa_keypair_derand*(pk: var openArray[byte];
   # buf = coins || KYBER_K ; hash_g(buf, buf[0..SYMBYTES])  (SYMBYTES+1 input)
   copyMem(addr buf[0], unsafeAddr coins[0], KYBER_SYMBYTES)
   buf[KYBER_SYMBYTES] = KYBER_K.byte
-  hash_g(buf, buf.toOpenArray(0, KYBER_SYMBYTES))  # length = SYMBYTES+1
+  hash_g(buf, buf.toOpenArray(0, KYBER_SYMBYTES)) # length = SYMBYTES+1
 
   # publicseed = buf[0 ..< SYMBYTES], noiseseed = buf[SYMBYTES ..< 2*SYMBYTES]
   gen_matrix(a, buf.toOpenArray(0, KYBER_SYMBYTES - 1), false)
 
   for i in 0 ..< KYBER_K:
-    poly_getnoise_eta1(skpv.vec[i], buf.toOpenArray(KYBER_SYMBYTES, 2*KYBER_SYMBYTES - 1), nonce)
+    poly_getnoise_eta1(skpv.vec[i], buf.toOpenArray(KYBER_SYMBYTES,
+        2*KYBER_SYMBYTES - 1), nonce)
     inc nonce
   for i in 0 ..< KYBER_K:
-    poly_getnoise_eta1(e.vec[i], buf.toOpenArray(KYBER_SYMBYTES, 2*KYBER_SYMBYTES - 1), nonce)
+    poly_getnoise_eta1(e.vec[i], buf.toOpenArray(KYBER_SYMBYTES,
+        2*KYBER_SYMBYTES - 1), nonce)
     inc nonce
 
   polyvec_ntt(skpv)
@@ -171,7 +174,7 @@ proc indcpa_enc*(c: var openArray[byte];
 
   unpack_pk(pkpv, seed, pk)
   poly_frommsg(k, m)
-  gen_matrix(at, seed, true)  # A^T
+  gen_matrix(at, seed, true) # A^T
 
   for i in 0 ..< KYBER_K:
     poly_getnoise_eta1(sp.vec[i], coins, nonce); inc nonce

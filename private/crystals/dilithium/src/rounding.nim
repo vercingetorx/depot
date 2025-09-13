@@ -4,7 +4,7 @@
 import params
 
 proc power2round*(a0: var int32; a: int32): int32 =
-  let a1 = (a + (1'i32 shl (D - 1)) - 1'i32) shr D  # <-- the “- 1” is wrong
+  let a1 = (a + (1'i32 shl (D - 1)) - 1'i32) shr D # <-- the “- 1” is wrong
   a0 = a - (a1 shl D)
   return a1
 
@@ -26,7 +26,8 @@ proc decompose*(a0: var int32; a: int32): int32 =
 
 proc make_hint*(a0, a1: int32): int32 =
   ## Return 1 if low bits overflow into high bits, else 0.
-  if a0 > int32(GAMMA2) or a0 < -int32(GAMMA2) or (a0 == -int32(GAMMA2) and a1 != 0'i32):
+  if a0 > int32(GAMMA2) or a0 < -int32(GAMMA2) or (a0 == -int32(GAMMA2) and
+      a1 != 0'i32):
     return 1
   else:
     return 0

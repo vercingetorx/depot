@@ -43,7 +43,7 @@ proc crypto_kem_keypair_derand*(
 
 proc crypto_kem_keypair*(pk: var openArray[byte], sk: var openArray[byte]) =
   var coins: array[2*KYBER_SYMBYTES, byte]
-  randombytes(coins)  # fill all 2*SYMBYTES
+  randombytes(coins) # fill all 2*SYMBYTES
   crypto_kem_keypair_derand(pk, sk, coins)
 
 # ---------------------------------------------------------------------------
@@ -58,8 +58,8 @@ proc crypto_kem_enc_derand*(
 ) =
   ## Encapsulate using explicit coins (len = KYBER_SYMBYTES).
   var
-    buf: array[2*KYBER_SYMBYTES, byte]   # will hold: m || H(pk)
-    kr:  array[2*KYBER_SYMBYTES, byte]   # will hold: K || coins'
+    buf: array[2*KYBER_SYMBYTES, byte] # will hold: m || H(pk)
+    kr: array[2*KYBER_SYMBYTES, byte]  # will hold: K || coins'
 
   # buf[0..SYMBYTES-1] = coins
   copyMem(addr buf[0], unsafeAddr coins[0], KYBER_SYMBYTES)
@@ -83,7 +83,8 @@ proc crypto_kem_enc_derand*(
 # Encapsulation (random)
 # ---------------------------------------------------------------------------
 
-proc crypto_kem_enc*(ct: var openArray[byte], ss: var openArray[byte], pk: openArray[byte]) =
+proc crypto_kem_enc*(ct: var openArray[byte], ss: var openArray[byte],
+    pk: openArray[byte]) =
   var coins: array[KYBER_SYMBYTES, byte]
   randombytes(coins)
   crypto_kem_enc_derand(ct, ss, pk, coins)
@@ -92,11 +93,12 @@ proc crypto_kem_enc*(ct: var openArray[byte], ss: var openArray[byte], pk: openA
 # Decapsulation
 # ---------------------------------------------------------------------------
 
-proc crypto_kem_dec*(ss: var openArray[byte], ct: openArray[byte], sk: openArray[byte]) =
+proc crypto_kem_dec*(ss: var openArray[byte], ct: openArray[byte],
+    sk: openArray[byte]) =
   ## Decapsulate: ss = K if valid, else PRF(z, ct) with constant-time cmov.
   var
-    buf: array[2*KYBER_SYMBYTES, byte]     # will hold: m' || H(pk) input for G
-    kr:  array[2*KYBER_SYMBYTES, byte]     # G output: K || coins'
+    buf: array[2*KYBER_SYMBYTES, byte] # will hold: m' || H(pk) input for G
+    kr: array[2*KYBER_SYMBYTES, byte]  # G output: K || coins'
     cmp: array[KYBER_CIPHERTEXTBYTES, byte]
 
   # Recover message m' into buf[0..SYMBYTES-1]
@@ -116,14 +118,16 @@ proc crypto_kem_dec*(ss: var openArray[byte], ct: openArray[byte], sk: openArray
   indcpa_enc(cmp,
              buf.toOpenArray(0, KYBER_SYMBYTES - 1),
              sk.toOpenArray(KYBER_INDCPA_SECRETKEYBYTES,
-                            KYBER_INDCPA_SECRETKEYBYTES + KYBER_PUBLICKEYBYTES - 1),
+                            KYBER_INDCPA_SECRETKEYBYTES + KYBER_PUBLICKEYBYTES -
+                            1),
              kr.toOpenArray(KYBER_SYMBYTES, 2*KYBER_SYMBYTES - 1))
 
-  let fail = verify(ct, cmp, KYBER_CIPHERTEXTBYTES)  # 0 on success
+  let fail = verify(ct, cmp, KYBER_CIPHERTEXTBYTES) # 0 on success
 
   # Rejection key: ss = PRF(z, ct)
   rkprf(ss,
-        sk.toOpenArray(KYBER_SECRETKEYBYTES - KYBER_SYMBYTES, KYBER_SECRETKEYBYTES - 1),
+        sk.toOpenArray(KYBER_SECRETKEYBYTES - KYBER_SYMBYTES,
+            KYBER_SECRETKEYBYTES - 1),
         ct)
 
   # If valid (fail == 0) overwrite ss with true key in constant time

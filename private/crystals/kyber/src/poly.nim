@@ -7,7 +7,7 @@ import params, ntt, reduce, symmetric, types, cbd
 proc cmov_int16(r: var int16; v: int16; b: uint8) {.inline.} =
   ## Conditional move: if b==1 then r=v else r=r, constant time.
   ## Only the LSB of b is used.
-  let m = -int16(b and 1'u8)      # 0x0000 or 0xFFFF
+  let m = -int16(b and 1'u8) # 0x0000 or 0xFFFF
   r = r xor (m and (r xor v))
 
 # --- Message <-> Polynomial ----------------------------------------------------
@@ -31,7 +31,7 @@ proc poly_tomsg*(msg: var openArray[byte]; a: Poly) =
   for i in 0 ..< (KYBER_N div 8):
     msg[i] = 0
     for j in 0 ..< 8:
-      t  = a.coeffs[8*i + j].uint32
+      t = a.coeffs[8*i + j].uint32
       t = (t shl 1) + 1665
       t = t * 80635'u32
       t = (t shr 28) and 1
@@ -65,7 +65,8 @@ proc poly_compress*(r: var openArray[byte]; a: Poly) =
     for i in 0 ..< (KYBER_N div 8):
       for j in 0 ..< 8:
         # map to positive standard representative: u += (u>>15) & q
-        let u = (a.coeffs[8*i + j].int32 + ((a.coeffs[8*i + j].int32 shr 15) and KYBER_Q)).uint32
+        let u = (a.coeffs[8*i + j].int32 + ((a.coeffs[8*i + j].int32 shr 15) and
+            KYBER_Q)).uint32
         d0 = (u shl 4) + 1665'u32
         d0 = d0 * 80635'u32
         d0 = d0 shr 28
@@ -80,7 +81,8 @@ proc poly_compress*(r: var openArray[byte]; a: Poly) =
   elif KYBER_POLYCOMPRESSEDBYTES == 160:
     for i in 0 ..< (KYBER_N div 8):
       for j in 0 ..< 8:
-        let u = (a.coeffs[8*i + j].int32 + ((a.coeffs[8*i + j].int32 shr 15) and KYBER_Q)).uint32
+        let u = (a.coeffs[8*i + j].int32 + ((a.coeffs[8*i + j].int32 shr 15) and
+            KYBER_Q)).uint32
         d0 = (u shl 5) + 1664'u32
         d0 = d0 * 40318'u32
         d0 = d0 shr 27
@@ -104,8 +106,10 @@ proc poly_decompress*(r: var Poly; a: openArray[byte]) =
 
   when KYBER_POLYCOMPRESSEDBYTES == 128:
     for i in 0 ..< (KYBER_N div 2):
-      r.coeffs[2*i + 0] = ((((a[off] and 15).uint16 * KYBER_Q.uint16) + 8'u16) shr 4).int16
-      r.coeffs[2*i + 1] = ((((a[off] shr 4).uint16 * KYBER_Q.uint16) + 8'u16) shr 4).int16
+      r.coeffs[2*i + 0] = ((((a[off] and 15).uint16 * KYBER_Q.uint16) +
+          8'u16) shr 4).int16
+      r.coeffs[2*i + 1] = ((((a[off] shr 4).uint16 * KYBER_Q.uint16) +
+          8'u16) shr 4).int16
       inc off
 
   elif KYBER_POLYCOMPRESSEDBYTES == 160:
@@ -121,7 +125,8 @@ proc poly_decompress*(r: var Poly; a: openArray[byte]) =
       t[7] = (a[off + 4] shr 3)
       off += 5
       for j in 0 ..< 8:
-        r.coeffs[8*i + j] = (((t[j] and 31).uint32 * KYBER_Q.uint32 + 16'u32) shr 5).int16
+        r.coeffs[8*i + j] = (((t[j] and 31).uint32 * KYBER_Q.uint32 +
+            16'u32) shr 5).int16
 
   else:
     {.error: "KYBER_POLYCOMPRESSEDBYTES must be 128 or 160".}
@@ -135,8 +140,10 @@ proc poly_tobytes*(r: var openArray[byte]; a: Poly) =
   var t0, t1: uint16
   for i in 0 ..< (KYBER_N div 2):
     # map to positive representatives using constant-time trick
-    t0 = (a.coeffs[2*i].uint16) + ((a.coeffs[2*i].int32 shr 15) and KYBER_Q).uint16
-    t1 = (a.coeffs[2*i + 1].uint16) + ((a.coeffs[2*i + 1].int32 shr 15) and KYBER_Q).uint16
+    t0 = (a.coeffs[2*i].uint16) + ((a.coeffs[2*i].int32 shr 15) and
+        KYBER_Q).uint16
+    t1 = (a.coeffs[2*i + 1].uint16) + ((a.coeffs[2*i + 1].int32 shr 15) and
+        KYBER_Q).uint16
     r[3*i + 0] = (t0 shr 0).uint8
     r[3*i + 1] = ((t0 shr 8) or (t1 shl 4)).uint8
     r[3*i + 2] = (t1 shr 4).uint8
@@ -146,8 +153,10 @@ proc poly_frombytes*(r: var Poly; a: openArray[byte]) =
   when not defined(release):
     doAssert a.len == KYBER_POLYBYTES
   for i in 0 ..< (KYBER_N div 2):
-    r.coeffs[2*i]   = (((a[3*i + 0].uint16) or (a[3*i + 1].uint16 shl 8)) and 0x0FFF'u16).int16
-    r.coeffs[2*i+1] = (((a[3*i + 1].uint16 shr 4) or (a[3*i + 2].uint16 shl 4)) and 0x0FFF'u16).int16
+    r.coeffs[2*i] = (((a[3*i + 0].uint16) or (a[3*i + 1].uint16 shl 8)) and
+        0x0FFF'u16).int16
+    r.coeffs[2*i+1] = (((a[3*i + 1].uint16 shr 4) or (a[3*i +
+        2].uint16 shl 4)) and 0x0FFF'u16).int16
 
 # --- Arithmetic on polynomials -----------------------------------------------
 
@@ -181,7 +190,7 @@ proc poly_basemul_montgomery*(r: var Poly; a, b: Poly) =
     ba[0] = b.coeffs[4*i]
     ba[1] = b.coeffs[4*i + 1]
     basemul(ra, aa, ba, zetas[64 + i])
-    r.coeffs[4*i]     = ra[0]
+    r.coeffs[4*i] = ra[0]
     r.coeffs[4*i + 1] = ra[1]
 
     aa[0] = a.coeffs[4*i + 2]
@@ -195,6 +204,6 @@ proc poly_basemul_montgomery*(r: var Poly; a, b: Poly) =
 proc poly_tomont*(r: var Poly) =
   ## In-place conversion from normal to Montgomery domain: x -> x * R mod q
   # f = (1ULL << 32) % KYBER_Q, computed in 64-bit to be explicit
-  const f: int32 = ( (1'u64 shl 32) mod KYBER_Q.uint64 ).int32
+  const f: int32 = ( (1'u64 shl 32) mod KYBER_Q.uint64).int32
   for i in 0 ..< KYBER_N:
     r.coeffs[i] = montgomery_reduce(r.coeffs[i].int32 * f)

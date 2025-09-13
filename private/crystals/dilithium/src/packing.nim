@@ -47,15 +47,15 @@ proc unpack_pk*(rho: var openArray[byte],
 
 proc pack_sk*(sk: var openArray[byte],
               rho: openArray[byte],
-              tr:  openArray[byte],
+              tr: openArray[byte],
               key: openArray[byte],
-              t0:  Polyveck,
-              s1:  Polyvecl,
-              s2:  Polyveck) =
+              t0: Polyveck,
+              s1: Polyvecl,
+              s2: Polyveck) =
   doAssert sk.len == CRYPTO_SECRETKEYBYTES
   doAssert rho.len == SEEDBYTES
   doAssert key.len == SEEDBYTES
-  doAssert tr.len  == TRBYTES
+  doAssert tr.len == TRBYTES
 
   var off = 0
 
@@ -99,16 +99,16 @@ proc pack_sk*(sk: var openArray[byte],
     off += POLYT0_PACKEDBYTES
 
 proc unpack_sk*(rho: var openArray[byte],
-                tr:  var openArray[byte],
+                tr: var openArray[byte],
                 key: var openArray[byte],
-                t0:  var Polyveck,
-                s1:  var Polyvecl,
-                s2:  var Polyveck,
-                sk:  openArray[byte]) =
+                t0: var Polyveck,
+                s1: var Polyvecl,
+                s2: var Polyveck,
+                sk: openArray[byte]) =
   doAssert sk.len == CRYPTO_SECRETKEYBYTES
   doAssert rho.len == SEEDBYTES
   doAssert key.len == SEEDBYTES
-  doAssert tr.len  == TRBYTES
+  doAssert tr.len == TRBYTES
 
   var off = 0
 
@@ -124,7 +124,7 @@ proc unpack_sk*(rho: var openArray[byte],
 
   # tr
   for i in 0..<TRBYTES:
-    tr[i]  = sk[off + i]
+    tr[i] = sk[off + i]
   off += TRBYTES
 
   # s1
@@ -154,11 +154,11 @@ proc unpack_sk*(rho: var openArray[byte],
 # --- Signature: sig = (c, z, h) ---------------------------------------------
 
 proc pack_sig*(sig: var openArray[byte],
-               c:   openArray[byte],
-               z:   Polyvecl,
-               h:   Polyveck) =
+               c: openArray[byte],
+               z: Polyvecl,
+               h: Polyveck) =
   doAssert sig.len == CRYPTO_BYTES
-  doAssert c.len   == CTILDEBYTES
+  doAssert c.len == CTILDEBYTES
 
   var off = 0
 
@@ -187,12 +187,12 @@ proc pack_sig*(sig: var openArray[byte],
         inc k
     sig[off + OMEGA + i] = byte(k)
 
-proc unpack_sig*(c:  var openArray[byte],
-                 z:  var Polyvecl,
-                 h:  var Polyveck,
+proc unpack_sig*(c: var openArray[byte],
+                 z: var Polyvecl,
+                 h: var Polyveck,
                  sig: openArray[byte]): int =
   doAssert sig.len == CRYPTO_BYTES
-  doAssert c.len   == CTILDEBYTES
+  doAssert c.len == CTILDEBYTES
 
   var off = 0
 

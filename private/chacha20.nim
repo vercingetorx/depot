@@ -18,7 +18,7 @@ proc encodeBytes(s: string): seq[byte] =
   result = newSeq[byte](s.len)
   for i, c in s:
     result[i] = byte(c)
-  
+
   return result
 
 
@@ -27,24 +27,25 @@ proc decodeBytes(bs: openArray[byte]): string =
   result = newStringOfCap(bs.len)
   for i, b in bs:
     result.add(char(b))
-  
+
   return result
 
 
 proc loadU32LittleEndian(arr: openArray[uint8], index: int): uint32 =
   if not (index + 4 <= arr.len):
     raise newException(IndexDefect, "index error")
-  result = uint32(arr[index + 0])         or
-          (uint32(arr[index + 1]) shl 8 ) or
+  result = uint32(arr[index + 0]) or
+          (uint32(arr[index + 1]) shl 8) or
           (uint32(arr[index + 2]) shl 16) or
           (uint32(arr[index + 3]) shl 24)
 
 
-proc storeU32LittleEndian(arr: var openArray[uint8], index: int, value: uint32) =
+proc storeU32LittleEndian(arr: var openArray[uint8], index: int,
+    value: uint32) =
   if not (index + 4 <= arr.len):
     raise newException(IndexDefect, "index error")
-  arr[index + 0] = uint8( value         and 0xFF)
-  arr[index + 1] = uint8((value shr 8 ) and 0xFF)
+  arr[index + 0] = uint8(value and 0xFF)
+  arr[index + 1] = uint8((value shr 8) and 0xFF)
   arr[index + 2] = uint8((value shr 16) and 0xFF)
   arr[index + 3] = uint8((value shr 24) and 0xFF)
 
@@ -116,15 +117,15 @@ proc generateBlock(ctx: var ChaCha20Ctx, h: var array[16, uint32]) =
   # NOTE: core loop
   for i in 0 ..< 10:
     # NOTE: column round
-    quarterRound(h[0], h[4], h[8],  h[12])
-    quarterRound(h[1], h[5], h[9],  h[13])
+    quarterRound(h[0], h[4], h[8], h[12])
+    quarterRound(h[1], h[5], h[9], h[13])
     quarterRound(h[2], h[6], h[10], h[14])
     quarterRound(h[3], h[7], h[11], h[15])
     # NOTE: diagonal round
     quarterRound(h[0], h[5], h[10], h[15])
     quarterRound(h[1], h[6], h[11], h[12])
-    quarterRound(h[2], h[7], h[8],  h[13])
-    quarterRound(h[3], h[4], h[9],  h[14])
+    quarterRound(h[2], h[7], h[8], h[13])
+    quarterRound(h[3], h[4], h[9], h[14])
 
   # NOTE: add and store results
   for i in 0 ..< 16:
@@ -156,7 +157,8 @@ proc generateBlock(ctx: var ChaCha20Ctx, h: var array[16, uint32]) =
     discard
 
 
-proc crypt*(ctx: var ChaCha20Ctx, input: openArray[uint8], output: var openArray[uint8], bufferIdx: int) =
+proc crypt*(ctx: var ChaCha20Ctx, input: openArray[uint8],
+    output: var openArray[uint8], bufferIdx: int) =
   if ctx.nonce.len notin [8, 12]:
     raise newException(ValueError, "nonce must be 8/12 bytes")
 
@@ -170,9 +172,11 @@ proc crypt*(ctx: var ChaCha20Ctx, input: openArray[uint8], output: var openArray
     if ctx.usedKeyStream == sizeof(ctx.keyStream).uint:
       ctx.generateBlock(h)
 
-    keyStreamToUse = min(remainingLen, sizeof(ctx.keyStream) - int(ctx.usedKeyStream))
+    keyStreamToUse = min(remainingLen, sizeof(ctx.keyStream) - int(
+        ctx.usedKeyStream))
     for i in 0 ..< keyStreamToUse:
-      output[indexOffset + i] = input[indexOffset + i] xor ctx.keyStream[i + int(ctx.usedKeyStream)]
+      output[indexOffset + i] = input[indexOffset + i] xor ctx.keyStream[i +
+          int(ctx.usedKeyStream)]
 
     indexOffset += keyStreamToUse
     remainingLen -= keyStreamToUse
@@ -182,7 +186,7 @@ proc crypt*(ctx: var ChaCha20Ctx, input: openArray[uint8], output: var openArray
 proc crypt*(ctx: var ChaCha20Ctx, input: openArray[uint8]): seq[byte] =
   if ctx.nonce.len notin [8, 12]:
     raise newException(ValueError, "nonce must be 8/12 bytes")
-  
+
   result = newSeq[byte](input.len)
 
   var remainingLen = input.len
@@ -195,9 +199,11 @@ proc crypt*(ctx: var ChaCha20Ctx, input: openArray[uint8]): seq[byte] =
     if ctx.usedKeyStream == sizeof(ctx.keyStream).uint:
       ctx.generateBlock(h)
 
-    keyStreamToUse = min(remainingLen, sizeof(ctx.keyStream) - int(ctx.usedKeyStream))
+    keyStreamToUse = min(remainingLen, sizeof(ctx.keyStream) - int(
+        ctx.usedKeyStream))
     for i in 0 ..< keyStreamToUse:
-      result[indexOffset + i] = input[indexOffset + i] xor ctx.keyStream[i + int(ctx.usedKeyStream)]
+      result[indexOffset + i] = input[indexOffset + i] xor ctx.keyStream[i +
+          int(ctx.usedKeyStream)]
 
     indexOffset += keyStreamToUse
     remainingLen -= keyStreamToUse
@@ -206,19 +212,23 @@ proc crypt*(ctx: var ChaCha20Ctx, input: openArray[uint8]): seq[byte] =
   return result
 
 
-proc encrypt*(state: var ChaCha20Ctx, input: openArray[uint8], output: var openArray[uint8], bufferIdx: int) =
+proc encrypt*(state: var ChaCha20Ctx, input: openArray[uint8],
+    output: var openArray[uint8], bufferIdx: int) =
   crypt(state, input, output, bufferIdx)
 
 
-proc encrypt*(state: var ChaCha20Ctx, input: string, output: var openArray[uint8], bufferIdx: int) =
+proc encrypt*(state: var ChaCha20Ctx, input: string, output: var openArray[
+    uint8], bufferIdx: int) =
   crypt(state, input.encodeBytes(), output, bufferIdx)
 
 
-proc decrypt*(state: var ChaCha20Ctx, input: openArray[uint8], output: var openArray[uint8], bufferIdx: int) =
+proc decrypt*(state: var ChaCha20Ctx, input: openArray[uint8],
+    output: var openArray[uint8], bufferIdx: int) =
   crypt(state, input, output, bufferIdx)
 
 
-proc decrypt*(state: var ChaCha20Ctx, input: string, output: var openArray[uint8], bufferIdx: int) =
+proc decrypt*(state: var ChaCha20Ctx, input: string, output: var openArray[
+    uint8], bufferIdx: int) =
   crypt(state, input.encodeBytes(), output, bufferIdx)
 
 
@@ -266,13 +276,13 @@ proc hChaCha20(key, nonce16: openArray[uint8]): seq[byte] =
 
   var h: array[16, uint32]
   ctx.generateBlock(h)
-  
+
   result = newSeq[byte](32)
   # NOTE: only keep the first and last row from the new state
-  storeU32LittleEndian(result,  0, h[ 0])
-  storeU32LittleEndian(result,  4, h[ 1])
-  storeU32LittleEndian(result,  8, h[ 2])
-  storeU32LittleEndian(result, 12, h[ 3])
+  storeU32LittleEndian(result, 0, h[0])
+  storeU32LittleEndian(result, 4, h[1])
+  storeU32LittleEndian(result, 8, h[2])
+  storeU32LittleEndian(result, 12, h[3])
   storeU32LittleEndian(result, 16, h[12])
   storeU32LittleEndian(result, 20, h[13])
   storeU32LittleEndian(result, 24, h[14])
@@ -294,7 +304,8 @@ proc newChaCha20Ctx*(key, nonce: string): ChaCha20Ctx =
   return newChaCha20Ctx(key.encodeBytes(), nonce.encodeBytes())
 
 
-proc derivePoly1305KeyPair*(key: openArray[byte], nonce: openArray[byte]): (seq[byte], seq[byte], seq[byte]) =
+proc derivePoly1305KeyPair*(key: openArray[byte], nonce: openArray[byte]): (seq[
+    byte], seq[byte], seq[byte]) =
   if key.len != ChaChaKeySize:
     raise newException(ValueError, "Poly1305 with ChaCha20 requires a 32-byte key")
 
@@ -318,7 +329,7 @@ proc derivePoly1305KeyPair*(key: openArray[byte], nonce: openArray[byte]): (seq[
   var ctx = newChaCha20Ctx(key, paddedNonce)
   derivedKey = ctx.encrypt(emptyData)
 
-  let r = derivedKey[0 .. 15]  # NOTE: first 16 bytes
-  let s = derivedKey[16 .. 31]  # NOTE: next 16 bytes
+  let r = derivedKey[0 .. 15] # NOTE: first 16 bytes
+  let s = derivedKey[16 .. 31] # NOTE: next 16 bytes
 
   return (r, s, paddedNonce)

@@ -21,7 +21,7 @@ when KYBER_ETA1 == 3:
 proc cbd2(r: var Poly; buf: openArray[byte]) =
   when not defined(release):
     doAssert r.coeffs.len >= KYBER_N
-    doAssert buf.len >= (KYBER_N div 2)  # 2*KYBER_N/4
+    doAssert buf.len >= (KYBER_N div 2) # 2*KYBER_N/4
 
   let mask = 0x55555555'u32
   for i in 0 ..< (KYBER_N div 8):
@@ -31,7 +31,7 @@ proc cbd2(r: var Poly; buf: openArray[byte]) =
     # 8 coefficients per 32-bit chunk
     let base = 8*i
     for j in 0 ..< 8:
-      let a = int16((d shr (4*j))     and 0x3'u32)
+      let a = int16((d shr (4*j)) and 0x3'u32)
       let b = int16((d shr (4*j + 2)) and 0x3'u32)
       r.coeffs[base + j] = a - b
 
@@ -48,7 +48,7 @@ when KYBER_ETA1 == 3:
 
       let base = 4*i
       for j in 0 ..< 4:
-        let a = int16((d shr (6*j))     and 0x7'u32)
+        let a = int16((d shr (6*j)) and 0x7'u32)
         let b = int16((d shr (6*j + 3)) and 0x7'u32)
         r.coeffs[base + j] = a - b
 

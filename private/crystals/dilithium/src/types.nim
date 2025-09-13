@@ -12,4 +12,4 @@ type
   Polyveck* = object
     vec*: array[K, Poly]
 
-  MatrixA* = array[K, Polyvecl]   # A is K×L (row i is Polyvecl)
+  MatrixA* = array[K, Polyvecl] # A is K×L (row i is Polyvecl)

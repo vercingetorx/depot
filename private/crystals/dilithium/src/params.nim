@@ -12,12 +12,12 @@ else:
 
 const
   SEEDBYTES* = 32
-  CRHBYTES*  = 64
-  TRBYTES*   = 64
-  RNDBYTES*  = 32
-  N*         = 256
-  Q*         = 8_380_417
-  D*         = 13
+  CRHBYTES* = 64
+  TRBYTES* = 64
+  RNDBYTES* = 32
+  N* = 256
+  Q* = 8_380_417
+  D* = 13
   ROOT_OF_UNITY* = 1753
 
 static: doAssert DILITHIUM_MODE in {2, 3, 5}, "Unsupported DILITHIUM_MODE"
@@ -57,8 +57,8 @@ elif DILITHIUM_MODE == 5:
     CTILDEBYTES* = 64
 
 const
-  POLYT1_PACKEDBYTES*   = 320
-  POLYT0_PACKEDBYTES*   = 416
+  POLYT1_PACKEDBYTES* = 320
+  POLYT0_PACKEDBYTES* = 416
   POLYVECH_PACKEDBYTES* = OMEGA + K
 
 when GAMMA1 == (1 shl 17):
@@ -89,4 +89,4 @@ const
                            L * POLYETA_PACKEDBYTES +
                            K * POLYETA_PACKEDBYTES +
                            K * POLYT0_PACKEDBYTES
-  CRYPTO_BYTES*          = CTILDEBYTES + L * POLYZ_PACKEDBYTES + POLYVECH_PACKEDBYTES
+  CRYPTO_BYTES* = CTILDEBYTES + L * POLYZ_PACKEDBYTES + POLYVECH_PACKEDBYTES

@@ -23,7 +23,8 @@ proc zeroize*(s: var seq[byte]) {.inline.} =
 
 proc aeadEncrypt*(key: AeadKey,
                   nonce: AeadNonce24,
-                  plaintext, ad: openArray[byte]): tuple[ciphertext: seq[byte], tag: array[16, byte]] =
+                  plaintext, ad: openArray[byte]): tuple[ciphertext: seq[byte],
+                      tag: array[16, byte]] =
   # Derive Poly1305 one-time key from block 0
   var ctx0 = newChaCha20Ctx(key, nonce)
   var empty: array[32, byte]
@@ -53,9 +54,9 @@ proc aeadEncrypt*(key: AeadKey,
     var pad2 = newSeq[byte](16 - (result.ciphertext.len mod 16))
     if pad2.len > 0: mac.update(pad2)
   var lens: array[16, byte]
-  let adLen  = le64(ad.len.uint64)
-  let ctLen  = le64(result.ciphertext.len.uint64)
-  for i in 0 ..< 8: lens[i]     = adLen[i]
+  let adLen = le64(ad.len.uint64)
+  let ctLen = le64(result.ciphertext.len.uint64)
+  for i in 0 ..< 8: lens[i] = adLen[i]
   for i in 0 ..< 8: lens[8 + i] = ctLen[i]
   mac.update(lens)
   result.tag = mac.digest()
@@ -85,9 +86,9 @@ proc aeadDecrypt*(key: AeadKey,
     var pad2 = newSeq[byte](16 - (ciphertext.len mod 16))
     if pad2.len > 0: mac.update(pad2)
   var lens: array[16, byte]
-  let adLen  = le64(ad.len.uint64)
-  let ctLen  = le64(ciphertext.len.uint64)
-  for i in 0 ..< 8: lens[i]     = adLen[i]
+  let adLen = le64(ad.len.uint64)
+  let ctLen = le64(ciphertext.len.uint64)
+  for i in 0 ..< 8: lens[i] = adLen[i]
   for i in 0 ..< 8: lens[8 + i] = ctLen[i]
   mac.update(lens)
   let expTag = mac.digest()

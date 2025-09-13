@@ -6,17 +6,17 @@ import src/[params, sign]
 # ----- Sizes & names (depend on selected mode) -----
 
 const
-  PublicKeyBytes*  = CRYPTO_PUBLICKEYBYTES
-  SecretKeyBytes*  = CRYPTO_SECRETKEYBYTES
-  SignatureBytes*  = CRYPTO_BYTES
+  PublicKeyBytes* = CRYPTO_PUBLICKEYBYTES
+  SecretKeyBytes* = CRYPTO_SECRETKEYBYTES
+  SignatureBytes* = CRYPTO_BYTES
   AlgorithmName* = when DILITHIUM_MODE == 2: "Dilithium2"
                   elif DILITHIUM_MODE == 3: "Dilithium3"
                   else: "Dilithium5"
 
 type
-  PublicKey*  = array[PublicKeyBytes, byte]
-  SecretKey*  = array[SecretKeyBytes, byte]
-  Signature*  = array[SignatureBytes, byte]
+  PublicKey* = array[PublicKeyBytes, byte]
+  SecretKey* = array[SecretKeyBytes, byte]
+  Signature* = array[SignatureBytes, byte]
 
 # ----- Key generation -----
 
@@ -71,22 +71,26 @@ proc openSignedMessage*(signedMessage: openArray[byte],
 
 # ----- Convenience overloads for strings -----
 
-proc signDetached*(message: string, secretKey: SecretKey, context: string = ""): Signature =
+proc signDetached*(message: string, secretKey: SecretKey,
+    context: string = ""): Signature =
   signDetached(message.toOpenArrayByte(0, message.high), secretKey,
                context.toOpenArrayByte(0, max(-1, context.high)))
 
-proc verifyDetached*(signature: Signature, message: string, publicKey: PublicKey, context: string = ""): bool =
+proc verifyDetached*(signature: Signature, message: string,
+    publicKey: PublicKey, context: string = ""): bool =
   verifyDetached(signature,
                  message.toOpenArrayByte(0, message.high),
                  publicKey,
                  context.toOpenArrayByte(0, max(-1, context.high)))
 
-proc signMessage*(message: string, secretKey: SecretKey, context: string = ""): seq[byte] =
+proc signMessage*(message: string, secretKey: SecretKey,
+    context: string = ""): seq[byte] =
   signMessage(message.toOpenArrayByte(0, message.high),
               secretKey,
               context.toOpenArrayByte(0, max(-1, context.high)))
 
-proc openSignedMessage*(signedMessage: openArray[byte], publicKey: PublicKey, context: string): (bool, seq[byte]) =
+proc openSignedMessage*(signedMessage: openArray[byte], publicKey: PublicKey,
+    context: string): (bool, seq[byte]) =
   openSignedMessage(signedMessage,
                     publicKey,
                     context.toOpenArrayByte(0, max(-1, context.high)))
@@ -117,8 +121,9 @@ when isMainModule:
   # ------------------------------------------------------------
   let textMessageNoContext = "hello Bob"
   let detachedSignatureNoContext = signDetached(textMessageNoContext, aliceSecretKey)
-  let isValidDetachedNoContext = verifyDetached(detachedSignatureNoContext, textMessageNoContext, alicePublicKey)
-  echo "[detached / text / no context] valid? ", isValidDetachedNoContext      # true
+  let isValidDetachedNoContext = verifyDetached(detachedSignatureNoContext,
+      textMessageNoContext, alicePublicKey)
+  echo "[detached / text / no context] valid? ", isValidDetachedNoContext # true
 
   # ------------------------------------------------------------
   # 2) Sign a TEXT message WITH a context label
@@ -126,16 +131,18 @@ when isMainModule:
   #    If you use a label while signing, you must use the exact same label to verify.
   # ------------------------------------------------------------
   let contextLabel = "payments/v1"
-  let invoiceText  = "charge $20 to account #42"
+  let invoiceText = "charge $20 to account #42"
 
   let detachedSignatureWithLabel = signDetached(invoiceText, aliceSecretKey, contextLabel)
 
-  let isValidDetachedWithLabel = verifyDetached(detachedSignatureWithLabel, invoiceText, alicePublicKey, contextLabel)
-  echo "[detached / text / with label] valid? ", isValidDetachedWithLabel     # true
+  let isValidDetachedWithLabel = verifyDetached(detachedSignatureWithLabel,
+      invoiceText, alicePublicKey, contextLabel)
+  echo "[detached / text / with label] valid? ", isValidDetachedWithLabel # true
 
   # If the verifier uses a different label, verification fails:
-  let isValidWrongLabel = verifyDetached(detachedSignatureWithLabel, invoiceText, alicePublicKey, "different-label")
-  echo "[detached / text / wrong label] valid? ", isValidWrongLabel           # false
+  let isValidWrongLabel = verifyDetached(detachedSignatureWithLabel,
+      invoiceText, alicePublicKey, "different-label")
+  echo "[detached / text / wrong label] valid? ", isValidWrongLabel # false
 
   # ------------------------------------------------------------
   # 3) Sign BYTES (binary data) without a context label
@@ -143,14 +150,15 @@ when isMainModule:
   let fileChunk: seq[byte] = @[byte 0xDE, 0xAD, 0xBE, 0xEF]
   let detachedSignatureBytes = signDetached(fileChunk, aliceSecretKey)
   let isValidDetachedBytes = verifyDetached(detachedSignatureBytes, fileChunk, alicePublicKey)
-  echo "[detached / bytes / no context] valid? ", isValidDetachedBytes        # true
+  echo "[detached / bytes / no context] valid? ", isValidDetachedBytes # true
 
   # ------------------------------------------------------------
   # 4) Verifying with the WRONG public key fails
   # ------------------------------------------------------------
   let (otherPublicKey, _) = generateKeypair()
-  let isValidWithWrongKey = verifyDetached(detachedSignatureNoContext, textMessageNoContext, otherPublicKey)
-  echo "[detached / text / wrong public key] valid? ", isValidWithWrongKey    # false
+  let isValidWithWrongKey = verifyDetached(detachedSignatureNoContext,
+      textMessageNoContext, otherPublicKey)
+  echo "[detached / text / wrong public key] valid? ", isValidWithWrongKey # false
 
   # ============================================================
   # ATTACHED SIGNATURES  (you send/store one blob: signature || message)
@@ -163,23 +171,25 @@ when isMainModule:
   let meetingNote = "meet at 12"
   let signedBlobWithLabel = signMessage(meetingNote, aliceSecretKey, contextLabel)
 
-  let (isValidAttachedWithLabel, recoveredBytes1) = openSignedMessage(signedBlobWithLabel, alicePublicKey, contextLabel)
+  let (isValidAttachedWithLabel, recoveredBytes1) = openSignedMessage(
+      signedBlobWithLabel, alicePublicKey, contextLabel)
 
   let recoveredText1 = bytesToString(recoveredBytes1)
   echo "[attached / text / with label] valid? ", isValidAttachedWithLabel,
-       "  recovered matches? ", (recoveredText1 == meetingNote)              # true / true
+       "  recovered matches? ", (recoveredText1 == meetingNote) # true / true
 
   # If the signed blob is changed, verification fails:
   var tampered = signedBlobWithLabel
   if tampered.len > 0: tampered[0] = tampered[0] xor 1
   let (isValidAfterTamper, _) = openSignedMessage(tampered, alicePublicKey, contextLabel)
-  echo "[attached / text / tampered] valid? ", isValidAfterTamper            # false
+  echo "[attached / text / tampered] valid? ", isValidAfterTamper # false
 
   # ------------------------------------------------------------
   # 6) Sign BYTES without a context label (attached form)
   # ------------------------------------------------------------
   let dataBlock: seq[byte] = @[byte 1, 2, 3, 4, 5]
-  let signedBlobNoLabel = signMessage(dataBlock, aliceSecretKey)   # no label
-  let (isValidAttachedNoLabel, recoveredBytes2) = openSignedMessage(signedBlobNoLabel, alicePublicKey) # no label on verify
+  let signedBlobNoLabel = signMessage(dataBlock, aliceSecretKey)       # no label
+  let (isValidAttachedNoLabel, recoveredBytes2) = openSignedMessage(
+      signedBlobNoLabel, alicePublicKey) # no label on verify
   echo "[attached / bytes / no context] valid? ", isValidAttachedNoLabel,
-       "  recovered matches? ", (recoveredBytes2 == dataBlock)     # true / true
+       "  recovered matches? ", (recoveredBytes2 == dataBlock) # true / true

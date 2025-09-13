@@ -66,27 +66,28 @@ proc poly_use_hint*(b: var Poly; a, h: Poly) =
 proc poly_chknorm*(a: Poly; B: int32): int =
   if B > (Q - 1) div 8: return 1
   for i in 0 ..< N:
-    var t = a.coeffs[i] shr 31            # sign mask
-    t = a.coeffs[i] - (t and 2 * a.coeffs[i])  # abs value without leaking sign
+    var t = a.coeffs[i] shr 31 # sign mask
+    t = a.coeffs[i] - (t and 2 * a.coeffs[i]) # abs value without leaking sign
     if t >= B: return 1
   0
 
 # ---------------- Rejection samplers ----------------
 
-proc rej_uniform(dst: var openArray[int32], len: int,
-                 buf: openArray[byte], buflen: int): int =
+proc rej_uniform(dst: var openArray[int32]; len: int;
+                 buf: openArray[byte]; buflen: int): int =
   var ctr = 0
   var pos = 0
   while ctr < len and pos + 3 <= buflen:
-    var t = (uint32(buf[pos]) or (uint32(buf[pos+1]) shl 8) or (uint32(buf[pos+2]) shl 16)) and 0x7FFFFFu32
+    var t = (uint32(buf[pos]) or (uint32(buf[pos+1]) shl 8) or (uint32(buf[
+        pos+2]) shl 16)) and 0x7FFFFFu32
     pos += 3
     if int(t) < Q:
       dst[ctr] = int32(t)
       inc ctr
   ctr
 
-proc rej_eta(dst: var openArray[int32], len: int,
-             buf: openArray[byte], buflen: int): int =
+proc rej_eta(dst: var openArray[int32]; len: int;
+             buf: openArray[byte]; buflen: int): int =
   var ctr = 0
   var pos = 0
   while ctr < len and pos < buflen:
@@ -109,7 +110,8 @@ proc rej_eta(dst: var openArray[int32], len: int,
 
 # ---------------- Uniform sampling ----------------
 
-const POLY_UNIFORM_NBLOCKS* = (768 + STREAM128_BLOCKBYTES - 1) div STREAM128_BLOCKBYTES
+const POLY_UNIFORM_NBLOCKS* = (768 + STREAM128_BLOCKBYTES -
+    1) div STREAM128_BLOCKBYTES
 
 proc poly_uniform*(a: var Poly; seed: openArray[byte]; nonce: uint16) =
   doAssert seed.len == SEEDBYTES
@@ -131,9 +133,11 @@ proc poly_uniform*(a: var Poly; seed: openArray[byte]; nonce: uint16) =
 # ---------------- ETA sampling ----------------
 
 when ETA == 2:
-  const POLY_UNIFORM_ETA_NBLOCKS* = (136 + STREAM256_BLOCKBYTES - 1) div STREAM256_BLOCKBYTES
+  const POLY_UNIFORM_ETA_NBLOCKS* = (136 + STREAM256_BLOCKBYTES -
+      1) div STREAM256_BLOCKBYTES
 elif ETA == 4:
-  const POLY_UNIFORM_ETA_NBLOCKS* = (227 + STREAM256_BLOCKBYTES - 1) div STREAM256_BLOCKBYTES
+  const POLY_UNIFORM_ETA_NBLOCKS* = (227 + STREAM256_BLOCKBYTES -
+      1) div STREAM256_BLOCKBYTES
 
 proc poly_uniform_eta*(a: var Poly; seed: openArray[byte]; nonce: uint16) =
   doAssert seed.len == CRHBYTES
@@ -146,7 +150,8 @@ proc poly_uniform_eta*(a: var Poly; seed: openArray[byte]; nonce: uint16) =
   var ctr = rej_eta(a.coeffs.oa(0, N), N, buf.roa(0, buflen), buflen)
   while ctr < N:
     stream256_squeezeblocks(buf.oa(0, STREAM256_BLOCKBYTES), 1, st)
-    ctr += rej_eta(a.coeffs.oa(ctr, N - ctr), N - ctr, buf.roa(0, STREAM256_BLOCKBYTES), STREAM256_BLOCKBYTES)
+    ctr += rej_eta(a.coeffs.oa(ctr, N - ctr), N - ctr, buf.roa(0,
+        STREAM256_BLOCKBYTES), STREAM256_BLOCKBYTES)
 
 # ---------------- GAMMA1 sampling ----------------
 
@@ -199,25 +204,25 @@ proc polyeta_pack*(r: var openArray[byte]; a: Poly) =
     for i in 0 ..< N div 8:
       var t: array[8, uint32]
       for j in 0 .. 7: t[j] = uint32(ETA - a.coeffs[8*i + j])
-      r[3*i + 0] = byte( (t[0]      ) or (t[1] shl 3) or (t[2] shl 6) )
-      r[3*i + 1] = byte( (t[2] shr 2) or (t[3] shl 1) or (t[4] shl 4) or (t[5] shl 7) )
-      r[3*i + 2] = byte( (t[5] shr 1) or (t[6] shl 2) or (t[7] shl 5) )
+      r[3*i + 0] = byte( (t[0]) or (t[1] shl 3) or (t[2] shl 6))
+      r[3*i + 1] = byte( (t[2] shr 2) or (t[3] shl 1) or (t[4] shl 4) or (t[5] shl 7))
+      r[3*i + 2] = byte( (t[5] shr 1) or (t[6] shl 2) or (t[7] shl 5))
   elif ETA == 4:
     for i in 0 ..< N div 2:
       let t0 = uint32(ETA - a.coeffs[2*i])
       let t1 = uint32(ETA - a.coeffs[2*i+1])
-      r[i] = byte( t0 or (t1 shl 4) )
+      r[i] = byte(t0 or (t1 shl 4))
 
 proc polyeta_unpack*(r: var Poly; a: openArray[byte]) =
   doAssert a.len == POLYETA_PACKEDBYTES
   when ETA == 2:
     for i in 0 ..< N div 8:
-      var v0 = (a[3*i+0]      ) and 7
+      var v0 = (a[3*i+0]) and 7
       var v1 = (a[3*i+0] shr 3) and 7
-      var v2 = ( (a[3*i+0] shr 6) or (a[3*i+1] shl 2) ) and 7
+      var v2 = ( (a[3*i+0] shr 6) or (a[3*i+1] shl 2)) and 7
       var v3 = (a[3*i+1] shr 1) and 7
       var v4 = (a[3*i+1] shr 4) and 7
-      var v5 = ( (a[3*i+1] shr 7) or (a[3*i+2] shl 1) ) and 7
+      var v5 = ( (a[3*i+1] shr 7) or (a[3*i+2] shl 1)) and 7
       var v6 = (a[3*i+2] shr 2) and 7
       var v7 = (a[3*i+2] shr 5) and 7
       r.coeffs[8*i+0] = ETA - int32(v0)
@@ -232,7 +237,7 @@ proc polyeta_unpack*(r: var Poly; a: openArray[byte]) =
     for i in 0 ..< N div 2:
       let lo = int32(a[i] and 0x0F)
       let hi = int32(a[i] shr 4)
-      r.coeffs[2*i]   = ETA - lo
+      r.coeffs[2*i] = ETA - lo
       r.coeffs[2*i+1] = ETA - hi
 
 # ---------------- Packing: t1 (10-bit) ----------------
@@ -248,15 +253,18 @@ proc polyt1_pack*(r: var openArray[byte]; a: Poly) =
     r[5*i+1] = byte(((a0 shr 8) or (a1 shl 2)) and 0xFF)
     r[5*i+2] = byte(((a1 shr 6) or (a2 shl 4)) and 0xFF)
     r[5*i+3] = byte(((a2 shr 4) or (a3 shl 6)) and 0xFF)
-    r[5*i+4] = byte( (a3 shr 2) and 0xFF )
+    r[5*i+4] = byte( (a3 shr 2) and 0xFF)
 
 proc polyt1_unpack*(r: var Poly; a: openArray[byte]) =
   doAssert a.len == POLYT1_PACKEDBYTES
   for i in 0 ..< N div 4:
-    r.coeffs[4*i+0] = int32( (uint32(a[5*i+0]) or (uint32(a[5*i+1]) shl 8)) and 0x3FF )
-    r.coeffs[4*i+1] = int32( ((uint32(a[5*i+1]) shr 2) or (uint32(a[5*i+2]) shl 6)) and 0x3FF )
-    r.coeffs[4*i+2] = int32( ((uint32(a[5*i+2]) shr 4) or (uint32(a[5*i+3]) shl 4)) and 0x3FF )
-    r.coeffs[4*i+3] = int32( ((uint32(a[5*i+3]) shr 6) or (uint32(a[5*i+4]) shl 2)) and 0x3FF )
+    r.coeffs[4*i+0] = int32( (uint32(a[5*i+0]) or (uint32(a[5*i+1]) shl 8)) and 0x3FF)
+    r.coeffs[4*i+1] = int32( ((uint32(a[5*i+1]) shr 2) or (uint32(a[
+        5*i+2]) shl 6)) and 0x3FF)
+    r.coeffs[4*i+2] = int32( ((uint32(a[5*i+2]) shr 4) or (uint32(a[
+        5*i+3]) shl 4)) and 0x3FF)
+    r.coeffs[4*i+3] = int32( ((uint32(a[5*i+3]) shr 6) or (uint32(a[
+        5*i+4]) shl 2)) and 0x3FF)
 
 # ---------------- Packing: t0 (13-bit signed window) ----------------
 
@@ -266,16 +274,16 @@ proc polyt0_pack*(r: var openArray[byte]; a: Poly) =
     var t: array[8, uint32]
     for j in 0 .. 7:
       t[j] = uint32((1 shl (D-1)) - a.coeffs[8*i + j]) and 0x1FFF'u32
-    r[13*i+0]  = byte( t[0]        and 0xFF )
-    r[13*i+1]  = byte((t[0] shr 8) or (t[1] shl 5))
-    r[13*i+2]  = byte( t[1] shr 3 )
-    r[13*i+3]  = byte((t[1] shr 11) or (t[2] shl 2))
-    r[13*i+4]  = byte((t[2] shr 6)  or (t[3] shl 7))
-    r[13*i+5]  = byte( t[3] shr 1 )
-    r[13*i+6]  = byte((t[3] shr 9)  or (t[4] shl 4))
-    r[13*i+7]  = byte((t[4] shr 4))
-    r[13*i+8]  = byte((t[4] shr 12) or (t[5] shl 1))
-    r[13*i+9]  = byte((t[5] shr 7)  or (t[6] shl 6))
+    r[13*i+0] = byte(t[0] and 0xFF)
+    r[13*i+1] = byte((t[0] shr 8) or (t[1] shl 5))
+    r[13*i+2] = byte(t[1] shr 3)
+    r[13*i+3] = byte((t[1] shr 11) or (t[2] shl 2))
+    r[13*i+4] = byte((t[2] shr 6) or (t[3] shl 7))
+    r[13*i+5] = byte(t[3] shr 1)
+    r[13*i+6] = byte((t[3] shr 9) or (t[4] shl 4))
+    r[13*i+7] = byte((t[4] shr 4))
+    r[13*i+8] = byte((t[4] shr 12) or (t[5] shl 1))
+    r[13*i+9] = byte((t[5] shr 7) or (t[6] shl 6))
     r[13*i+10] = byte((t[6] shr 2))
     r[13*i+11] = byte((t[6] shr 10) or (t[7] shl 3))
     r[13*i+12] = byte((t[7] shr 5))
@@ -284,12 +292,16 @@ proc polyt0_unpack*(r: var Poly; a: openArray[byte]) =
   doAssert a.len == POLYT0_PACKEDBYTES
   for i in 0 ..< N div 8:
     let x0 = (uint32(a[13*i+0]) or (uint32(a[13*i+1]) shl 8)) and 0x1FFF
-    let x1 = ((uint32(a[13*i+1]) shr 5) or (uint32(a[13*i+2]) shl 3) or (uint32(a[13*i+3]) shl 11)) and 0x1FFF
+    let x1 = ((uint32(a[13*i+1]) shr 5) or (uint32(a[13*i+2]) shl 3) or (uint32(
+        a[13*i+3]) shl 11)) and 0x1FFF
     let x2 = ((uint32(a[13*i+3]) shr 2) or (uint32(a[13*i+4]) shl 6)) and 0x1FFF
-    let x3 = ((uint32(a[13*i+4]) shr 7) or (uint32(a[13*i+5]) shl 1) or (uint32(a[13*i+6]) shl 9)) and 0x1FFF
-    let x4 = ((uint32(a[13*i+6]) shr 4) or (uint32(a[13*i+7]) shl 4) or (uint32(a[13*i+8]) shl 12)) and 0x1FFF
+    let x3 = ((uint32(a[13*i+4]) shr 7) or (uint32(a[13*i+5]) shl 1) or (uint32(
+        a[13*i+6]) shl 9)) and 0x1FFF
+    let x4 = ((uint32(a[13*i+6]) shr 4) or (uint32(a[13*i+7]) shl 4) or (uint32(
+        a[13*i+8]) shl 12)) and 0x1FFF
     let x5 = ((uint32(a[13*i+8]) shr 1) or (uint32(a[13*i+9]) shl 7)) and 0x1FFF
-    let x6 = ((uint32(a[13*i+9]) shr 6) or (uint32(a[13*i+10]) shl 2) or (uint32(a[13*i+11]) shl 10)) and 0x1FFF
+    let x6 = ((uint32(a[13*i+9]) shr 6) or (uint32(a[13*i+10]) shl 2) or (
+        uint32(a[13*i+11]) shl 10)) and 0x1FFF
     let x7 = ((uint32(a[13*i+11]) shr 3) or (uint32(a[13*i+12]) shl 5)) and 0x1FFF
     r.coeffs[8*i+0] = (1 shl (D-1)) - int32(x0)
     r.coeffs[8*i+1] = (1 shl (D-1)) - int32(x1)
@@ -333,18 +345,24 @@ proc polyz_unpack*(r: var Poly; a: openArray[byte]) =
   doAssert a.len == POLYZ_PACKEDBYTES
   when GAMMA1 == (1 shl 17):
     for i in 0 ..< N div 4:
-      let x0 = (uint32(a[9*i+0]) or (uint32(a[9*i+1]) shl 8) or (uint32(a[9*i+2]) shl 16)) and 0x3FFFF
-      let x1 = ((uint32(a[9*i+2]) shr 2) or (uint32(a[9*i+3]) shl 6) or (uint32(a[9*i+4]) shl 14)) and 0x3FFFF
-      let x2 = ((uint32(a[9*i+4]) shr 4) or (uint32(a[9*i+5]) shl 4) or (uint32(a[9*i+6]) shl 12)) and 0x3FFFF
-      let x3 = ((uint32(a[9*i+6]) shr 6) or (uint32(a[9*i+7]) shl 2) or (uint32(a[9*i+8]) shl 10)) and 0x3FFFF
+      let x0 = (uint32(a[9*i+0]) or (uint32(a[9*i+1]) shl 8) or (uint32(a[
+          9*i+2]) shl 16)) and 0x3FFFF
+      let x1 = ((uint32(a[9*i+2]) shr 2) or (uint32(a[9*i+3]) shl 6) or (uint32(
+          a[9*i+4]) shl 14)) and 0x3FFFF
+      let x2 = ((uint32(a[9*i+4]) shr 4) or (uint32(a[9*i+5]) shl 4) or (uint32(
+          a[9*i+6]) shl 12)) and 0x3FFFF
+      let x3 = ((uint32(a[9*i+6]) shr 6) or (uint32(a[9*i+7]) shl 2) or (uint32(
+          a[9*i+8]) shl 10)) and 0x3FFFF
       r.coeffs[4*i+0] = GAMMA1 - int32(x0)
       r.coeffs[4*i+1] = GAMMA1 - int32(x1)
       r.coeffs[4*i+2] = GAMMA1 - int32(x2)
       r.coeffs[4*i+3] = GAMMA1 - int32(x3)
   elif GAMMA1 == (1 shl 19):
     for i in 0 ..< N div 2:
-      let x0 = (uint32(a[5*i+0]) or (uint32(a[5*i+1]) shl 8) or (uint32(a[5*i+2]) shl 16)) and 0xFFFFF
-      let x1 = (((uint32(a[5*i+2]) shr 4) or (uint32(a[5*i+3]) shl 4) or (uint32(a[5*i+4]) shl 12))) and 0xFFFFF'u32 # up to 20 bits
+      let x0 = (uint32(a[5*i+0]) or (uint32(a[5*i+1]) shl 8) or (uint32(a[
+          5*i+2]) shl 16)) and 0xFFFFF
+      let x1 = (((uint32(a[5*i+2]) shr 4) or (uint32(a[5*i+3]) shl 4) or (
+          uint32(a[5*i+4]) shl 12))) and 0xFFFFF'u32 # up to 20 bits
       r.coeffs[2*i+0] = GAMMA1 - int32(x0)
       r.coeffs[2*i+1] = GAMMA1 - int32(x1)
 
