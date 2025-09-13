@@ -1,4 +1,5 @@
-import std/[math, os, times, strutils, terminal]
+import std/[math, os, strutils, terminal, strformat]
+import common
 
 ## State used to throttle/format progress output on TTYs.
 var prLastLen*: int
@@ -7,8 +8,8 @@ var prLastPct*: int = -1
 let prIsTty* = isatty(stdout)
 
 proc nowMs*(): int64 =
-  ## Current wall-clock time in milliseconds since Unix epoch.
-  int64(epochTime() * 1000)
+  ## Monotonic milliseconds suitable for intervals/timeouts.
+  common.monoMs()
 
 proc fmt2(f: float): string =
   ## Format a floating-point number with 2 decimal places.
@@ -18,19 +19,19 @@ proc formatBytes*(x: int64): string =
   ## Pretty-print a byte count using IEC units (B, KiB, MiB, GiB).
   let b = x.float
   if b >= 1024.0*1024*1024:
-    return fmt2(b/(1024*1024*1024)) & " GiB"
+    return fmt"{fmt2(b/(1024*1024*1024))} GiB"
   elif b >= 1024.0*1024:
-    return fmt2(b/(1024*1024)) & " MiB"
+    return fmt"{fmt2(b/(1024*1024))} MiB"
   elif b >= 1024.0:
-    return fmt2(b/1024) & " KiB"
+    return fmt"{fmt2(b/1024)} KiB"
   else:
-    return $x & " B"
+    return fmt"{x} B"
 
 proc clearProgress*() =
   ## Clear the current progress line from the terminal (if a TTY).
   ## Resets internal throttle state so the next update prints immediately.
   if prIsTty and prLastLen > 0:
-    stdout.write("\r" & repeat(' ', prLastLen) & "\r")
+    stdout.write(fmt"\r{repeat(' ', prLastLen)}\r")
     stdout.flushFile()
     prLastLen = 0
     prLastPct = -1
@@ -51,9 +52,9 @@ proc shortenName(name: string, maxLen: int): string =
   ## Abbreviate a file name to fit within maxLen by placing an ellipsis in
   ## the middle when necessary. Returns the original if it already fits.
   if name.len <= maxLen: return name
-  if maxLen <= 3: return name.substr(0, max(0, maxLen-1)) & "…"
+  if maxLen <= 3: return fmt"{name.substr(0, max(0, maxLen-1))}…"
   let keep = (maxLen - 1) div 2
-  return name.substr(0, keep) & "…" & name.substr(name.len - keep)
+  return fmt"{name.substr(0, keep)}…{name.substr(name.len - keep)}"
 
 proc printProgress2*(action, name: string, done, total: int64, startMs: int64) =
   ## Render a one-line, throttled progress indicator with optional ETA.
@@ -73,31 +74,34 @@ proc printProgress2*(action, name: string, done, total: int64, startMs: int64) =
   # Throttle to reduce flicker unless percent changes
   if prLastPct == pct and (now - prLastMs) < 100:
     return
-  let rateStr = formatBytes(int64(bytesPerSec)) & "/s"
+  let rateStr = fmt"{formatBytes(int64(bytesPerSec))}/s"
   var suffix: string
   if total > 0:
-    suffix = " " & $pct & "% (" & formatBytes(done) & "/" & formatBytes(total) & ", " & rateStr & ")"
+    suffix = fmt" {pct}% ({formatBytes(done)}/{formatBytes(total)}, {rateStr})"
   else:
-    suffix = " (" & formatBytes(done) & ", " & rateStr & ")"
+    suffix = fmt" ({formatBytes(done)}, {rateStr})"
   if total > 0 and bytesPerSec > 0.0 and done < total:
     let remain = (total.float - done.float) / bytesPerSec
     let secs = int(remain)
     let h = secs div 3600
     let m = (secs mod 3600) div 60
     let s = secs mod 60
-    let eta = (if h > 0: $(h) & ":" else: "") & ($m).align(2, '0') & ":" & ($s).align(2, '0')
-    suffix &= ", ETA " & eta
+    let mm = ($m).align(2, '0')
+    let ss = ($s).align(2, '0')
+    let pref = if h > 0: fmt"{h}:" else: ""
+    let eta = fmt"{pref}{mm}:{ss}"
+    suffix &= fmt", ETA {eta}"
   let cols = envCols()
-  let base = action & " "
+  let base = fmt"{action} "
   var nm = name
   let maxName = max(0, cols - (base.len + suffix.len))
   nm = shortenName(nm, maxName)
-  let line = base & nm & suffix
+  let line = fmt"{base}{nm}{suffix}"
   let pad = max(0, prLastLen - line.len)
-  stdout.write("\r" & line & repeat(' ', pad))
+  stdout.write(fmt"\r{line}{repeat(' ', pad)}")
   stdout.flushFile()
   prLastLen = line.len
   prLastPct = pct
   prLastMs = now
 
-## (moved above for use within printProgress2)
+## end
