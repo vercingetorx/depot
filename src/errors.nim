@@ -213,7 +213,11 @@ proc serverMessage*(c: InfoCode): string =
 
 import std/strformat
 
-proc encodeClient*(c: ErrorCode): string = fmt"[{codeName(c)}] {clientMessage(c)}"
+proc encodeClient*(c: ErrorCode, details: string = ""): string =
+  var msg = fmt"[{codeName(c)}] {clientMessage(c)}"
+  if details.len > 0:
+    msg.add(fmt": {details}")
+  msg
 proc encodeClient*(c: SuccessCode): string = fmt"[{codeName(c)}] {clientMessage(c)}"
 proc encodeClient*(c: InfoCode, details: string = ""): string =
   var msg = fmt"[{codeName(c)}] {clientMessage(c)}"
