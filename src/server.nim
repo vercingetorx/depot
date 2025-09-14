@@ -133,7 +133,7 @@ proc handleClient*(sock: AsyncSocket, baseDir: string) {.async.} =
     # ensure parent directories exist and aren't symlinks
     let parentDir = splitFile(currentPath).dir
     if parentDir.len > 0:
-      discard existsOrCreateDir(parentDir)
+      createDir(parentDir)
       try:
         let info = getFileInfo(parentDir)
         if info.kind == pcLinkToDir:
@@ -141,6 +141,7 @@ proc handleClient*(sock: AsyncSocket, baseDir: string) {.async.} =
           await session.sendRecord(UploadFail.uint8, @[toByte(ecUnsafePath)])
           return
       except OSError:
+        # FIXME: no silent errors.
         discard
     try:
       currentFile = open(partialPath, fmWrite)
