@@ -31,7 +31,9 @@ proc clearProgress*() =
   ## Clear the current progress line from the terminal (if a TTY).
   ## Resets internal throttle state so the next update prints immediately.
   if prIsTty and prLastLen > 0:
-    stdout.write(fmt"\r{repeat(' ', prLastLen)}\r")
+    stdout.write('\r')
+    stdout.write(fmt"{repeat(' ', prLastLen - 2)}")
+    stdout.write('\r')
     stdout.flushFile()
     prLastLen = 0
     prLastPct = -1
@@ -94,11 +96,12 @@ proc printProgress2*(action, name: string, done, total: int64, startMs: int64) =
   let cols = envCols()
   let base = fmt"{action} "
   var nm = name
-  let maxName = max(0, cols - (base.len + suffix.len))
+  let maxName = max(0, cols - (base.len + suffix.len + 1))
   nm = shortenName(nm, maxName)
   let line = fmt"{base}{nm}{suffix}"
   let pad = max(0, prLastLen - line.len)
-  stdout.write(fmt"\r{line}{repeat(' ', pad)}")
+  stdout.write('\r')
+  stdout.write(fmt"{line}{repeat(' ', pad)}")
   stdout.flushFile()
   prLastLen = line.len
   prLastPct = pct
