@@ -63,7 +63,7 @@ proc openSession*(remote: string, port: int): Future[Session] {.async.} =
 
 ## Progress helpers are provided by depot/progress.nim
 
-proc uploadFile*(sess: Session, srcPath, relDest: string) {.async.} =
+proc uploadFile(sess: Session, srcPath, relDest: string) {.async.} =
   ## Upload a single local file to the server at the given relative destination
   ## under the server import root. Streams data then awaits server commit.
   # Phase A: open upload with destination
@@ -139,158 +139,7 @@ proc uploadFile*(sess: Session, srcPath, relDest: string) {.async.} =
   await streamFile(srcPath)
   await awaitCommit()
 
-proc downloadFile*(sess: Session, relSrc, destPath: string) {.async.} =
-  ## Download a single remote file (relative to export root) into a concrete
-  ## local path (not a directory). Uses PathOpen/PathAccept handshake.
-  # Phase A: request file
-  proc requestFile(relativePath: string) {.async.} =
-    ## Send DownloadOpen for a single file identified by relativePath.
-    let req = encodePathParam(relativePath)
-    await sess.sendRecord(DownloadOpen.uint8, req)
-
-  # Phase B: handle incoming records with optional ack
-  var outFile: File
-  # Hasher to verify integrity of the downloaded file against FileClose digest
-  var downloadHasher = newBlake2bCtx(digestSize=32)
-  var totalBytes: int64 = -1
-  var receivedBytes: int64 = 0
-  var accepted = false
-  var skipped = false
-  var pendingErr = ""
-  let startMs = nowMs()
-
-  proc cleanupPartial() =
-    if outFile != nil:
-      outFile.close()
-    discard tryRemoveFile(common.partPath(destPath))
-
-  var recvMtime: int64 = 0
-  var recvPerms: set[FilePermission]
-
-  proc onPathOpen(payload: seq[byte]) {.async.} =
-    ## Receive PathOpen and decide accept/skip based on local path.
-    let (_, size, mtimeU, perms) = parsePathOpen(payload)
-    totalBytes = size
-    recvMtime = mtimeU
-    recvPerms = perms
-    # Decide whether to accept or skip
-    if fileExists(destPath):
-      if sess.dlAck:
-        var b: array[1, byte]
-        b[0] = byte(SkipReason.srExists)
-        await sess.sendRecord(PathSkip.uint8, b)
-        skipped = true
-        pendingErr = fmt"{errFileExists}{destPath}"
-      else:
-        raise newException(CatchableError, fmt"file exists: {destPath}")
-    else:
-      # Prepare to receive and ack accept if negotiated
-      outFile = open(common.partPath(destPath), fmWrite)
-      accepted = true
-      if sess.dlAck:
-        await sess.sendRecord(PathAccept.uint8, newSeq[byte]())
-
-  proc onFileData(payload: seq[byte]) =
-    ## Append a file data chunk to the output .part file.
-    if outFile != nil:
-      downloadHasher.update(payload)
-      try:
-        discard outFile.writeBytes(payload, 0, payload.len)
-      except OSError as e:
-        let ec = errors.osErrorToCode(e, ecWriteFail)
-        cleanupPartial()
-        asyncCheck sess.sendRecord(ErrorRec.uint8, @[toByte(ec)])
-        raise newException(CatchableError, errors.encodeClient(ec))
-      receivedBytes += payload.len.int64
-      printProgress2("[downloading]", extractFilename(destPath), receivedBytes, totalBytes, startMs)
-
-  proc onFileClose(payload: seq[byte]) {.async.} =
-    ## Finalize the .part file and move into place atomically.
-    if outFile != nil:
-      outFile.close()
-      if payload.len != 32:
-        # Report checksum error to server using 1-byte code
-        await sess.sendRecord(ErrorRec.uint8, @[toByte(ecChecksum)])
-        cleanupPartial()
-        clearProgress()
-        raise newException(CatchableError, fmt"checksum mismatch: {destPath}")
-      let dig = downloadHasher.digest()
-      var match = dig.len == 32
-      if match:
-        for i in 0 ..< 32:
-          if dig[i] != payload[i]: match = false
-      if not match:
-        await sess.sendRecord(ErrorRec.uint8, @[toByte(ecChecksum)])
-        cleanupPartial()
-        clearProgress()
-        raise newException(CatchableError, fmt"checksum mismatch: {destPath}")
-      if fileExists(destPath):
-        cleanupPartial()
-        clearProgress()
-        raise newException(CatchableError, fmt"file exists: {destPath}")
-      moveFile(common.partPath(destPath), destPath)
-      # Apply metadata
-      try:
-        setLastModificationTime(destPath, fromUnix(recvMtime))
-      except CatchableError:
-        discard
-      try:
-        setFilePermissions(destPath, recvPerms)
-      except CatchableError:
-        discard
-      clearProgress()
-
-  proc onServerError(payload: seq[byte]) =
-    ## Translate an ErrorRec payload into an exception and cleanup (code-based).
-    cleanupPartial()
-    var ec = ecUnknown
-    if payload.len == 1: ec = fromByte(payload[0])
-    raise newException(CatchableError, errors.encodeClient(ec))
-
-  await requestFile(relSrc)
-  while true:
-    let (t, payload) = await sess.recvRecord()
-    if t == 0'u8:
-      cleanupPartial()
-      raise newException(CatchableError, "connection closed by server during download")
-    case t
-    of uint8(PathOpen): await onPathOpen(payload)
-    of uint8(FileData): onFileData(payload)
-    of uint8(FileClose):
-      await onFileClose(payload)
-      break
-    of uint8(DownloadDone):
-      if skipped and pendingErr.len > 0:
-        raise newException(CatchableError, pendingErr)
-      if payload.len == 1:
-        let sc = fromByteSc(payload[0])
-        echo errors.encodeClient(sc)
-      break
-    of uint8(ErrorRec): onServerError(payload)
-    of uint8(RekeyReq):
-      if payload.len == 4:
-        let eb = payload
-        let (out1, out2) = handshake.deriveRekey(sess.trafficSecret, eb)
-        for i in 0 ..< 32: sess.pendingKTx[i] = out1[i]
-        for i in 0 ..< 16: sess.pendingPTx[i] = out1[32 + i]
-        for i in 0 ..< 32: sess.pendingKRx[i] = out2[i]
-        for i in 0 ..< 16: sess.pendingPRx[i] = out2[32 + i]
-        sess.pendingEpoch = uint32(eb[0]) or (uint32(eb[1]) shl 8) or (uint32(eb[2]) shl 16) or (uint32(eb[3]) shl 24)
-        await sess.sendRecord(RekeyAck.uint8, payload)
-        # activate
-        sess.epoch = sess.pendingEpoch
-        for i in 0 ..< 32: sess.kTx[i] = sess.pendingKTx[i]
-        for i in 0 ..< 32: sess.kRx[i] = sess.pendingKRx[i]
-        for i in 0 ..< 16: sess.pTx[i] = sess.pendingPTx[i]
-        for i in 0 ..< 16: sess.pRx[i] = sess.pendingPRx[i]
-        sess.seqTx = 0; sess.seqRx = 0
-        sess.lastRekeyMs = common.monoMs()
-        sess.pendingEpoch = 0'u32
-    of uint8(RekeyAck):
-      discard
-    else: discard
-
-proc uploadPaths*(sess: Session, sources: seq[string], remoteDir: string, skipExisting: bool = false) {.async.} =
+proc upload*(sess: Session, sources: seq[string], remoteDir: string, skipExisting: bool = false) {.async.} =
   ## Upload one or more files/directories into a remote directory (relative to
   ## the server import root). Creates remote directories as needed.
   # Phase: base path resolution
@@ -384,7 +233,12 @@ proc uploadPaths*(sess: Session, sources: seq[string], remoteDir: string, skipEx
   if failed > 0:
     quit(1)
 
-proc downloadTo*(sess: Session, remotePath: string, localDest: string, skipExisting: bool = false) {.async.} =
+proc download*(sess: Session, remotePaths: seq[string], localDest: string, skipExisting: bool = false) {.async.} =
+  ## Download one or more remote files or directory trees into a local destination.
+  for remotePath in remotePaths:
+    await downloadPath(sess, remotePath, localDest, skipExisting)
+
+proc downloadPath(sess: Session, remotePath: string, localDest: string, skipExisting: bool = false) {.async.} =
   ## Download a remote file or directory tree (relative to export root) into a
   ## local destination directory or file. When downloading a directory tree,
   ## creates local subdirectories under localDest.

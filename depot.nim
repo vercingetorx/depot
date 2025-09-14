@@ -219,7 +219,7 @@ proc runExport(argsIn: var seq[string], hereFlag, allFlag: bool,
         args = resolved
     # Phase 2: open session and upload
     var sess = waitFor client.openSession(host, remotePort)
-    waitFor client.uploadPaths(sess, args, remoteDest, skipExisting)
+    waitFor client.upload(sess, args, remoteDest, skipExisting)
   except CatchableError as e:
     stderr.writeLine(e.msg)
     quit(1)
@@ -245,9 +245,10 @@ proc runImport(args: seq[string], hereFlag, allFlag: bool,
       discard existsOrCreateDir(localDest)
     # Phase 2: open session and download
     var sess = waitFor client.openSession(host, remotePort)
+    var remotePaths: seq[string]
     for item in items:
-      let remotePath = if remoteSource.len > 0: (remoteSource / item).replace("\\", "/") else: item
-      waitFor client.downloadTo(sess, remotePath, localDest, skipExisting)
+      remotePaths.add(if remoteSource.len > 0: (remoteSource / item).replace("\\", "/") else: item)
+    waitFor client.download(sess, remotePaths, localDest, skipExisting)
   except CatchableError as e:
     stderr.writeLine(e.msg)
     quit(1)
