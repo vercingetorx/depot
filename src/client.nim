@@ -235,23 +235,21 @@ proc upload*(sess: Session, sources: seq[string], remoteDir: string, skipExistin
 
 proc download*(sess: Session, remotePaths: seq[string], localDest: string, skipExisting: bool = false) {.async.} =
   ## Download one or more remote files or directory trees into a local destination.
-  for remotePath in remotePaths:
-    await downloadPath(sess, remotePath, localDest, skipExisting)
 
-proc downloadPath(sess: Session, remotePath: string, localDest: string, skipExisting: bool = false) {.async.} =
-  ## Download a remote file or directory tree (relative to export root) into a
-  ## local destination directory or file. When downloading a directory tree,
-  ## creates local subdirectories under localDest.
-  # Phase: send request
-  let rp = remotePath.replace("\\", "/")
-  if sess.srvSandboxed:
-    if rp.len > 0 and rp[0] == '/':
-      raise newException(CatchableError, "absolute remote path not allowed in sandbox mode (use --no-sandbox on server)")
-    if hasDotDot(rp):
-      raise newException(CatchableError, "'..' path segments are not allowed in remote paths under sandbox mode")
-  let srcNorm = rp
-  let p = encodePathParam(srcNorm)
-  await sess.sendRecord(DownloadOpen.uint8, p)
+  proc downloadPath(remotePath: string) {.async.} =
+    ## Download a single remote file or directory tree (relative to export root) into a
+    ## local destination directory or file. When downloading a directory tree,
+    ## creates local subdirectories under localDest.
+    # Phase: send request
+    let rp = remotePath.replace("\\", "/")
+    if sess.srvSandboxed:
+      if rp.len > 0 and rp[0] == '/':
+        raise newException(CatchableError, "absolute remote path not allowed in sandbox mode (use --no-sandbox on server)")
+      if hasDotDot(rp):
+        raise newException(CatchableError, "'..' path segments are not allowed in remote paths under sandbox mode")
+    let srcNorm = rp
+    let p = encodePathParam(srcNorm)
+    await sess.sendRecord(DownloadOpen.uint8, p)
 
   # Phase: local transfer state
   var firstFile = true
@@ -412,6 +410,9 @@ proc downloadPath(sess: Session, remotePath: string, localDest: string, skipExis
       break
     of uint8(ErrorRec): onServerError(payload)
     else: discard
+
+  for remotePath in remotePaths:
+    await downloadPath(remotePath)
 
 proc listRemote*(sess: Session, remotePath: string) {.async.} =
   ## List files or a single file under a remote path without transferring data.
