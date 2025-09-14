@@ -47,6 +47,22 @@ const
   reasonTransfer* = "transferred"
   reasonList* = "list-item"
   reasonAbort* = "aborting"
+  reasonConnected* = "client-connected"
+  reasonDisconnected* = "client-disconnected"
+  reasonHandshake* = "handshake-complete"
+  reasonUpload* = "upload-start"
+  reasonRekey* = "rekey-propose"
+  reasonSkipped* = "client-skipped"
+  reasonAck* = "unexpected-ack"
+  reasonSend* = "send-file"
+  reasonSendDone* = "send-complete"
+  reasonDownload* = "download-request"
+  reasonDownloadDir* = "download-request-dir"
+  reasonListFile* = "list-file"
+  reasonListDir* = "list-dir"
+  reasonTimeoutClose* = "timeout-closing"
+  reasonSessionError* = "session-error"
+  reasonSessionIoError* = "session-io-error"
 
 type
   ErrorCode* = enum
@@ -81,6 +97,22 @@ type
     icSkipped
     icTransferred
     icListItem
+    icClientConnected
+    icClientDisconnected
+    icHandshakeComplete
+    icUploadStart
+    icRekeyPropose
+    icClientSkipped
+    icUnexpectedAck
+    icSendFile
+    icSendComplete
+    icDownloadRequest
+    icDownloadRequestDir
+    icListFile
+    icListDir
+    icTimeoutClose
+    icSessionError
+    icSessionIoError
 
 proc codeName*(c: ErrorCode): string =
   case c
@@ -119,6 +151,22 @@ proc codeName*(c: InfoCode): string =
   of icSkipped: reasonSkip
   of icTransferred: reasonTransfer
   of icListItem: reasonList
+  of icClientConnected: reasonConnected
+  of icClientDisconnected: reasonDisconnected
+  of icHandshakeComplete: reasonHandshake
+  of icUploadStart: reasonUpload
+  of icRekeyPropose: reasonRekey
+  of icClientSkipped: reasonSkipped
+  of icUnexpectedAck: reasonAck
+  of icSendFile: reasonSend
+  of icSendComplete: reasonSendDone
+  of icDownloadRequest: reasonDownload
+  of icDownloadRequestDir: reasonDownloadDir
+  of icListFile: reasonListFile
+  of icListDir: reasonListDir
+  of icTimeoutClose: reasonTimeoutClose
+  of icSessionError: reasonSessionError
+  of icSessionIoError: reasonSessionIoError
 
 proc toByte*(c: ErrorCode): byte = byte(c)
 proc fromByte*(b: byte): ErrorCode =
@@ -210,6 +258,22 @@ proc serverMessage*(c: InfoCode): string =
   of icSkipped: "skipped"
   of icTransferred: "transferred"
   of icListItem: "list item"
+  of icClientConnected: "client connected"
+  of icClientDisconnected: "client disconnected"
+  of icHandshakeComplete: "handshake complete"
+  of icUploadStart: "upload start"
+  of icRekeyPropose: "rekey propose"
+  of icClientSkipped: "client skipped"
+  of icUnexpectedAck: "unexpected ack"
+  of icSendFile: "send file"
+  of icSendComplete: "send complete"
+  of icDownloadRequest: "download request"
+  of icDownloadRequestDir: "download request (dir)"
+  of icListFile: "list file"
+  of icListDir: "list dir"
+  of icTimeoutClose: "session timeout; closing connection"
+  of icSessionError: "session error"
+  of icSessionIoError: "session I/O error"
 
 import std/strformat
 
@@ -232,6 +296,12 @@ proc encodeServer*(c: ErrorCode, details: string = ""): string =
   msg
 
 proc encodeServer*(c: SuccessCode, details: string = ""): string =
+  var msg = fmt"[{codeName(c)}] {serverMessage(c)}"
+  if details.len > 0:
+    msg.add(fmt": {details}")
+  msg
+
+proc encodeServer*(c: InfoCode, details: string = ""): string =
   var msg = fmt"[{codeName(c)}] {serverMessage(c)}"
   if details.len > 0:
     msg.add(fmt": {details}")

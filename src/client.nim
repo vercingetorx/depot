@@ -553,7 +553,8 @@ proc downloadTo*(sess: Session, remotePath: string, localDest: string, skipExist
       if payload.len == 1:
         let sc = fromByteSc(payload[0])
         echo errors.encodeClient(sc)
-      echo errors.encodeClient(icTransferred, details=fmt"{fileCount} file(s), {formatBytes(receivedBytesAll)}")
+      else:
+        echo errors.encodeClient(icTransferred, details=fmt"{fileCount} file(s), {formatBytes(receivedBytesAll)}")
       break
     of uint8(ErrorRec): onServerError(payload)
     else: discard
