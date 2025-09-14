@@ -37,6 +37,11 @@ const
   reasonConfig* = "server-config"
   reasonCompat* = "compat"
   reasonAuth*   = "auth"
+  # Success codes
+  reasonUploadOk* = "upload-ok"
+  reasonUploadDone* = "upload-done"
+  reasonDownloadDone* = "download-done"
+  reasonListDone* = "list-done"
 
 type
   ErrorCode* = enum
@@ -58,6 +63,11 @@ type
     ecConfig
     ecCompat
     ecAuth
+  SuccessCode* = enum
+    scUploadOk = 0'u8
+    scUploadDone
+    scDownloadDone
+    scListDone
 
 proc codeName*(c: ErrorCode): string =
   case c
@@ -80,10 +90,22 @@ proc codeName*(c: ErrorCode): string =
   of ecAuth: reasonAuth
   else: reasonUnknown
 
+proc codeName*(c: SuccessCode): string =
+  case c
+  of scUploadOk: reasonUploadOk
+  of scUploadDone: reasonUploadDone
+  of scDownloadDone: reasonDownloadDone
+  of scListDone: reasonListDone
+
 proc toByte*(c: ErrorCode): byte = byte(c)
 proc fromByte*(b: byte): ErrorCode =
   let v = uint8(b)
   if v <= uint8(high(ErrorCode)): ErrorCode(v) else: ecUnknown
+
+proc toByte*(c: SuccessCode): byte = byte(c)
+proc fromByteSc*(b: byte): SuccessCode =
+  let v = uint8(b)
+  if v <= uint8(high(SuccessCode)): SuccessCode(v) else: scUploadOk
 
 proc clientMessage*(c: ErrorCode): string =
   case c
@@ -106,6 +128,13 @@ proc clientMessage*(c: ErrorCode): string =
   of ecAuth: "authentication required or failed"
   else: "error"
 
+proc clientMessage*(c: SuccessCode): string =
+  case c
+  of scUploadOk: "upload ok"
+  of scUploadDone: "upload done"
+  of scDownloadDone: "download done"
+  of scListDone: "list done"
+
 proc serverMessage*(c: ErrorCode): string =
   case c
   of ecExists: "refusing overwrite"
@@ -127,10 +156,29 @@ proc serverMessage*(c: ErrorCode): string =
   of ecAuth: "client authentication error"
   else: "unknown"
 
+proc serverMessage*(c: SuccessCode): string =
+  case c
+  of scUploadOk: "upload ok"
+  of scUploadDone: "upload done"
+  of scDownloadDone: "download done"
+  of scListDone: "list done"
+
 import std/strformat
 
 proc encodeClient*(c: ErrorCode): string = fmt"[{codeName(c)}] {clientMessage(c)}"
-proc encodeServer*(c: ErrorCode): string = fmt"[{codeName(c)}] {serverMessage(c)}"
+proc encodeClient*(c: SuccessCode): string = fmt"[{codeName(c)}] {clientMessage(c)}"
+
+proc encodeServer*(c: ErrorCode, details: string = ""): string =
+  var msg = fmt"[{codeName(c)}] {serverMessage(c)}"
+  if details.len > 0:
+    msg.add(fmt": {details}")
+  msg
+
+proc encodeServer*(c: SuccessCode, details: string = ""): string =
+  var msg = fmt"[{codeName(c)}] {serverMessage(c)}"
+  if details.len > 0:
+    msg.add(fmt": {details}")
+  msg
 
 proc encodeReason*(code, message: string): string = fmt"[{code}] {message}"
 

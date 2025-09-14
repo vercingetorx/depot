@@ -84,6 +84,9 @@ proc uploadFile*(sess: Session, srcPath, relDest: string) {.async.} =
       raise newException(CatchableError, errors.encodeClient(ec))
     if t != UploadOk.uint8:
       raise newException(CatchableError, errors.encodeReason(errors.reasonUnknown, "server refused upload"))
+    if payload.len == 1:
+      let sc = fromByteSc(payload[0])
+      echo errors.encodeClient(sc)
 
   # Phase B: stream file data
   # Hasher for the current upload; used to compute checksum for FileClose
@@ -119,6 +122,9 @@ proc uploadFile*(sess: Session, srcPath, relDest: string) {.async.} =
       raise newException(CatchableError, errors.encodeClient(ec))
     if t != UploadDone.uint8:
       raise newException(CatchableError, errors.encodeReason(errors.reasonUnknown, "upload failed to commit on server"))
+    if payload.len == 1:
+      let sc = fromByteSc(payload[0])
+      echo errors.encodeClient(sc)
 
   await openUpload(relDest, srcPath)
   # Opportunistic time-based rekey at file boundary
@@ -256,6 +262,9 @@ proc downloadFile*(sess: Session, relSrc, destPath: string) {.async.} =
     of uint8(DownloadDone):
       if skipped and pendingErr.len > 0:
         raise newException(CatchableError, pendingErr)
+      if payload.len == 1:
+        let sc = fromByteSc(payload[0])
+        echo errors.encodeClient(sc)
       break
     of uint8(ErrorRec): onServerError(payload)
     of uint8(RekeyReq):
@@ -541,6 +550,9 @@ proc downloadTo*(sess: Session, remotePath: string, localDest: string, skipExist
       if pendingErr.len > 0:
         # Surface the local error after telling server to skip
         raise newException(CatchableError, pendingErr)
+      if payload.len == 1:
+        let sc = fromByteSc(payload[0])
+        echo errors.encodeClient(sc)
       echo fmt"Transferred {fileCount} file(s), {formatBytes(receivedBytesAll)}"
       break
     of uint8(ErrorRec): onServerError(payload)
@@ -568,6 +580,9 @@ proc listRemote*(sess: Session, remotePath: string) {.async.} =
         let kindStr = if it.kind == 1'u8: "[dir] " else: ""
         echo kindStr, it.relativePath, " (", formatBytes(it.fileSize), ")"
     of uint8(ListDone):
+      if payload.len == 1:
+        let sc = fromByteSc(payload[0])
+        echo errors.encodeClient(sc)
       break
     of uint8(ErrorRec):
       # Server sends a single-byte error code for ErrorRec

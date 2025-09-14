@@ -69,10 +69,7 @@ proc handleClient*(sock: AsyncSocket, baseDir: string) {.async.} =
       of reasonPerms: ec = ecPerms
       of reasonNoSpace: ec = ecNoSpace
       else: ec = ecUnknown
-    var logMsg = errors.encodeServer(ec)
-    if text.len > 0:
-      logMsg = fmt"{logMsg}: {text}"
-    errorSid(logMsg)
+    errorSid(errors.encodeServer(ec, details=text))
     try: sock.close() except: discard
     infoSid("client disconnected")
     return
@@ -100,18 +97,19 @@ proc handleClient*(sock: AsyncSocket, baseDir: string) {.async.} =
     # payload: encoded path + mtime + permissions
     let (relativeDestPath, srcMtimeUnix, srcPerms) = parseUploadOpen(payload)
     if relativeDestPath.len == 0:
+      errorSid(errors.encodeServer(ecBadPath, details=relativeDestPath))
       await session.sendRecord(UploadFail.uint8, @[toByte(ecBadPath)])
       return
     var destAbs: string
     if sandboxed:
       if relativeDestPath.len > 0 and relativeDestPath[0] == '/':
-        errorSid(errors.encodeServer(ecAbsolute))
+        errorSid(errors.encodeServer(ecAbsolute, details=relativeDestPath))
         await session.sendRecord(UploadFail.uint8, @[toByte(ecAbsolute)])
         return
       try:
         destAbs = cleanJoin(importDir, relativeDestPath)
-      except CatchableError:
-        errorSid(errors.encodeServer(ecUnsafePath))
+      except CatchableError as e:
+        errorSid(errors.encodeServer(ecUnsafePath, details=e.msg))
         await session.sendRecord(UploadFail.uint8, @[toByte(ecUnsafePath)])
         return
     else:
@@ -127,7 +125,7 @@ proc handleClient*(sock: AsyncSocket, baseDir: string) {.async.} =
     pendingPermissions = srcPerms
     # refuse early if destination already exists (unless server allows overwrite)
     if fileExists(currentPath) and not allowOverwrite:
-      errorSid(errors.encodeServer(ecExists))
+      errorSid(errors.encodeServer(ecExists, details=currentPath))
       await session.sendRecord(UploadFail.uint8, @[toByte(ecExists)])
       return
     # ensure parent directories exist and aren't symlinks
@@ -137,20 +135,21 @@ proc handleClient*(sock: AsyncSocket, baseDir: string) {.async.} =
       try:
         let info = getFileInfo(parentDir)
         if info.kind == pcLinkToDir:
-          errorSid(errors.encodeServer(ecUnsafePath))
+          errorSid(errors.encodeServer(ecUnsafePath, details=parentDir))
           await session.sendRecord(UploadFail.uint8, @[toByte(ecUnsafePath)])
           return
-      except OSError:
-        # FIXME: no silent errors.
-        discard
+      except OSError as e:
+        errorSid(errors.encodeServer(ecPerms, details=e.msg))
+        await session.sendRecord(UploadFail.uint8, @[toByte(ecPerms)])
+        return
     try:
       currentFile = open(partialPath, fmWrite)
     except OSError as e:
       let ec = errors.osErrorToCode(e, ecOpenFail)
-      errorSid(errors.encodeServer(ec))
+      errorSid(errors.encodeServer(ec, details=e.msg))
       await session.sendRecord(UploadFail.uint8, @[toByte(ec)])
       return
-    await session.sendRecord(UploadOk.uint8, newSeq[byte]())
+    await session.sendRecord(UploadOk.uint8, @[toByte(scUploadOk)])
 
   ## Handle a file data chunk for the current upload. Appends to the
   ## .part file and maps write failures to precise reasons.
@@ -161,7 +160,7 @@ proc handleClient*(sock: AsyncSocket, baseDir: string) {.async.} =
         uploadHasher.update(payload)
       except OSError as e:
         let ec = errors.osErrorToCode(e, ecWriteFail)
-        errorSid(errors.encodeServer(ec))
+        errorSid(errors.encodeServer(ec, details=e.msg))
         try: currentFile.close() except: discard
         currentFile = nil
         discard tryRemoveFile(partialPath)
@@ -195,7 +194,7 @@ proc handleClient*(sock: AsyncSocket, baseDir: string) {.async.} =
         partialPath = ""
         return
       if fileExists(currentPath) and not allowOverwrite:
-        errorSid(errors.encodeServer(ecExists))
+        errorSid(errors.encodeServer(ecExists, details=currentPath))
         discard tryRemoveFile(partialPath)
         await sendErrorCode(ecExists)
       else:
@@ -213,11 +212,11 @@ proc handleClient*(sock: AsyncSocket, baseDir: string) {.async.} =
             setFilePermissions(currentPath, pendingPermissions)
           except CatchableError:
             discard
-          infoSid(fmt"upload complete: {currentPath}")
-          await session.sendRecord(UploadDone.uint8, newSeq[byte]())
+          infoSid(errors.encodeServer(scUploadDone, details=currentPath))
+          await session.sendRecord(UploadDone.uint8, @[toByte(scUploadDone)])
         except OSError as e:
           let ec = errors.osErrorToCode(e, ecOpenFail)
-          errorSid(errors.encodeServer(ec))
+          errorSid(errors.encodeServer(ec, details=e.msg))
           discard tryRemoveFile(partialPath)
           await sendErrorCode(ec)
       currentFile = nil
@@ -233,19 +232,21 @@ proc handleClient*(sock: AsyncSocket, baseDir: string) {.async.} =
     # payload: varint path len | path bytes
     let (relReqFull, nextIdx) = decodePathParam(payload)
     if nextIdx < 0:
+      errorSid(errors.encodeServer(ecBadPayload))
       await session.sendRecord(ErrorRec.uint8, @[toByte(ecBadPayload)]); return
     if relReqFull.len == 0:
+      errorSid(errors.encodeServer(ecBadPath))
       await session.sendRecord(ErrorRec.uint8, @[toByte(ecBadPath)]); return
     var absReq: string
     if sandboxed:
       if relReqFull.len > 0 and relReqFull[0] == '/':
-        errorSid(errors.encodeServer(ecAbsolute))
+        errorSid(errors.encodeServer(ecAbsolute, details=relReqFull))
         await session.sendRecord(ErrorRec.uint8, @[toByte(ecAbsolute)])
         return
       try:
         absReq = cleanJoin(exportDir, relReqFull)
-      except CatchableError:
-        errorSid(errors.encodeServer(ecUnsafePath))
+      except CatchableError as e:
+        errorSid(errors.encodeServer(ecUnsafePath, details=e.msg))
         await session.sendRecord(ErrorRec.uint8, @[toByte(ecUnsafePath)])
         return
     else:
@@ -286,7 +287,7 @@ proc handleClient*(sock: AsyncSocket, baseDir: string) {.async.} =
         else:
           absPath = normalizedPath(exportDir / relativePath)
       if not isSafeFile(absPath):
-        errorSid(errors.encodeServer(ecUnsafePath))
+        errorSid(errors.encodeServer(ecUnsafePath, details=absPath))
         await session.sendRecord(ErrorRec.uint8, @[toByte(ecUnsafePath)])
         return
       let fileSize = getFileSize(absPath)
@@ -356,14 +357,14 @@ proc handleClient*(sock: AsyncSocket, baseDir: string) {.async.} =
         infoSid(fmt"send complete: {relativePath}")
       except OSError as e:
         let ec = errors.osErrorToCode(e, ecReadFail)
-        errorSid(errors.encodeServer(ec))
+        errorSid(errors.encodeServer(ec, details=e.msg))
         await session.sendRecord(ErrorRec.uint8, @[toByte(ec)])
 
     if fileExists(absReq):
       infoSid(fmt"download request: {relReqFull}")
       let relativePath = if absReq.isRelativeTo(exportDir): absReq.relativePath(exportDir).replace(DirSep, '/') else: relReqFull
       await streamFileIfAccepted(relativePath)
-      await session.sendRecord(DownloadDone.uint8, newSeq[byte]())
+      await session.sendRecord(DownloadDone.uint8, @[toByte(scDownloadDone)])
     elif dirExists(absReq):
       infoSid(fmt"download request (dir): {relReqFull}")
       let base = absReq
@@ -375,10 +376,10 @@ proc handleClient*(sock: AsyncSocket, baseDir: string) {.async.} =
         let relativePath = p.relativePath(base).replace(DirSep, '/')
         await streamFileIfAccepted(relativePath)
         inc count
-      await session.sendRecord(DownloadDone.uint8, newSeq[byte]())
-      infoSid(fmt"download directory complete: {relReqFull} ({count} files)")
+      await session.sendRecord(DownloadDone.uint8, @[toByte(scDownloadDone)])
+      infoSid(errors.encodeServer(scDownloadDone, details=fmt"{relReqFull} ({count} files)"))
     else:
-      errorSid(errors.encodeServer(ecNotFound))
+      errorSid(errors.encodeServer(ecNotFound, details=relReqFull))
       await session.sendRecord(ErrorRec.uint8, @[toByte(ecNotFound)])
 
   ## Handle a listing request: stream batched directory entries using
@@ -387,19 +388,21 @@ proc handleClient*(sock: AsyncSocket, baseDir: string) {.async.} =
     # payload: varint path len | path bytes (relative in sandbox)
     let (relReqFull, nextIdx) = decodePathParam(payload)
     if nextIdx < 0:
+      errorSid(errors.encodeServer(ecBadPayload))
       await session.sendRecord(ErrorRec.uint8, @[toByte(ecBadPayload)]); return
     if relReqFull.len == 0:
+      errorSid(errors.encodeServer(ecBadPath))
       await session.sendRecord(ErrorRec.uint8, @[toByte(ecBadPath)]); return
     var absReq: string
     if sandboxed:
       if relReqFull.len > 0 and relReqFull[0] == '/':
-        errorSid(errors.encodeServer(ecAbsolute))
+        errorSid(errors.encodeServer(ecAbsolute, details=relReqFull))
         await session.sendRecord(ErrorRec.uint8, @[toByte(ecAbsolute)])
         return
       try:
         absReq = cleanJoin(exportDir, relReqFull)
-      except CatchableError:
-        errorSid(errors.encodeServer(ecUnsafePath))
+      except CatchableError as e:
+        errorSid(errors.encodeServer(ecUnsafePath, details=e.msg))
         await session.sendRecord(ErrorRec.uint8, @[toByte(ecUnsafePath)])
         return
     else:
@@ -414,7 +417,7 @@ proc handleClient*(sock: AsyncSocket, baseDir: string) {.async.} =
       let item = protocol.encodeListItem(relativePath, int64(size), 0'u8)
       buf.add(item)
       await session.sendRecord(ListChunk.uint8, buf)
-      await session.sendRecord(ListDone.uint8, newSeq[byte]())
+      await session.sendRecord(ListDone.uint8, @[toByte(scListDone)])
       infoSid(fmt"list file: {relReqFull}")
     elif dirExists(absReq):
       infoSid(fmt"list dir: {relReqFull}")
@@ -442,10 +445,10 @@ proc handleClient*(sock: AsyncSocket, baseDir: string) {.async.} =
           inc count
       if chunk.len > 0:
         await session.sendRecord(ListChunk.uint8, chunk)
-      await session.sendRecord(ListDone.uint8, newSeq[byte]())
-      infoSid(fmt"list complete: {relReqFull} ({count} entries)")
+      await session.sendRecord(ListDone.uint8, @[toByte(scListDone)])
+      infoSid(errors.encodeServer(scListDone, details=fmt"{relReqFull} ({count} entries)"))
     else:
-      errorSid(errors.encodeServer(ecNotFound))
+      errorSid(errors.encodeServer(ecNotFound, details=relReqFull))
       await session.sendRecord(ErrorRec.uint8, @[toByte(ecNotFound)])
   try:
     # Phase: record dispatch loop
