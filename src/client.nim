@@ -251,165 +251,165 @@ proc download*(sess: Session, remotePaths: seq[string], localDest: string, skipE
     let p = encodePathParam(srcNorm)
     await sess.sendRecord(DownloadOpen.uint8, p)
 
-  # Phase: local transfer state
-  var firstFile = true
-  var fileOpen = false
-  var partFile: File
-  var targetPath: string
-  var totalBytes: int64 = -1
-  var receivedBytes: int64 = 0
-  var startMs = nowMs()
-  var fileCount = 0
-  var totalBytesAll: int64 = 0
-  var receivedBytesAll: int64 = 0
-  var skipCurrent = false
-  var pendingErr = ""
-  # Hasher for the current file within a directory download
-  var directoryDownloadHasher = newBlake2bCtx(digestSize=32)
-  var currentMtime: int64 = 0
-  var currentPerms: set[FilePermission]
+    # Phase: local transfer state
+    var firstFile = true
+    var fileOpen = false
+    var partFile: File
+    var targetPath: string
+    var totalBytes: int64 = -1
+    var receivedBytes: int64 = 0
+    var startMs = nowMs()
+    var fileCount = 0
+    var totalBytesAll: int64 = 0
+    var receivedBytesAll: int64 = 0
+    var skipCurrent = false
+    var pendingErr = ""
+    # Hasher for the current file within a directory download
+    var directoryDownloadHasher = newBlake2bCtx(digestSize=32)
+    var currentMtime: int64 = 0
+    var currentPerms: set[FilePermission]
 
-  # Phase: per-record handlers
-  proc startNewFile(relativePath: string, fileSize: int64) =
-    ## Begin writing a new target file under localDest, creating parents.
-    ## The remote path is a forward-slash separated relative path.
-    totalBytes = fileSize
-    inc fileCount
-    totalBytesAll += fileSize
-    if dirExists(localDest):
-      let full = normalizedPath(localDest / relativePath)
-      let parent = splitFile(full).dir
-      if parent.len > 0: discard existsOrCreateDir(parent)
-      targetPath = full
-    else:
-      if firstFile:
-        targetPath = localDest
+    # Phase: per-record handlers
+    proc startNewFile(relativePath: string, fileSize: int64) =
+      ## Begin writing a new target file under localDest, creating parents.
+      ## The remote path is a forward-slash separated relative path.
+      totalBytes = fileSize
+      inc fileCount
+      totalBytesAll += fileSize
+      if dirExists(localDest):
+        let full = normalizedPath(localDest / relativePath)
+        let parent = splitFile(full).dir
+        if parent.len > 0: discard existsOrCreateDir(parent)
+        targetPath = full
       else:
-        raise newException(CatchableError, "destination is a file but multiple files requested")
-    if skipExisting and fileExists(targetPath):
-      echo errors.encodeClient(icSkipped, details=fmt"{targetPath} ({formatBytes(totalBytes)})")
-      skipCurrent = true
-    else:
-      partFile = open(common.partPath(targetPath), fmWrite)
-      fileOpen = true
-    firstFile = false
-    receivedBytes = 0
-    startMs = nowMs()
-    directoryDownloadHasher = newBlake2bCtx(digestSize=32)
+        if firstFile:
+          targetPath = localDest
+        else:
+          raise newException(CatchableError, "destination is a file but multiple files requested")
+      if skipExisting and fileExists(targetPath):
+        echo errors.encodeClient(icSkipped, details=fmt"{targetPath} ({formatBytes(totalBytes)})")
+        skipCurrent = true
+      else:
+        partFile = open(common.partPath(targetPath), fmWrite)
+        fileOpen = true
+      firstFile = false
+      receivedBytes = 0
+      startMs = nowMs()
+      directoryDownloadHasher = newBlake2bCtx(digestSize=32)
 
-  # onPathOpen logic is handled inline in the receive loop to allow awaiting
+    # onPathOpen logic is handled inline in the receive loop to allow awaiting
 
-  proc onFileData(payload: seq[byte]) =
-    ## Handle a data chunk during directory download; writes or discards.
-    if skipCurrent:
-      discard
-    elif fileOpen and partFile != nil and payload.len > 0:
-      directoryDownloadHasher.update(payload)
-      try:
-        discard partFile.writeBytes(payload, 0, payload.len)
-      except OSError as e:
-        let ec = errors.osErrorToCode(e, ecWriteFail)
-        if partFile != nil:
-          partFile.close()
-        discard tryRemoveFile(common.partPath(targetPath))
-        asyncCheck sess.sendRecord(ErrorRec.uint8, @[toByte(ec)])
-        raise newException(CatchableError, errors.encodeClient(ec))
-      receivedBytes += payload.len.int64
-      receivedBytesAll += payload.len.int64
-      printProgress2("downloading", extractFilename(targetPath), receivedBytes, totalBytes, startMs)
-
-  proc onFileClose(payload: seq[byte]) {.async.} =
-    ## Complete the current file during directory download.
-    if skipCurrent:
-      clearProgress()
-      skipCurrent = false
-      fileOpen = false
-    elif fileOpen and partFile != nil:
-      partFile.close()
-      if payload.len != 32:
-        await sess.sendRecord(ErrorRec.uint8, @[toByte(ecChecksum)])
-        discard tryRemoveFile(common.partPath(targetPath))
-        clearProgress()
-        raise newException(CatchableError, fmt"checksum mismatch: {targetPath}")
-      let dig2 = directoryDownloadHasher.digest()
-      var match = dig2.len == 32
-      if match:
-        for i in 0 ..< 32:
-          if dig2[i] != payload[i]: match = false
-      if not match:
-        await sess.sendRecord(ErrorRec.uint8, @[toByte(ecChecksum)])
-        discard tryRemoveFile(common.partPath(targetPath))
-        clearProgress()
-        raise newException(CatchableError, fmt"checksum mismatch: {targetPath}")
-      if fileExists(targetPath):
-        discard tryRemoveFile(fmt"{targetPath}.part")
-        clearProgress()
-        raise newException(CatchableError, fmt"file exists: {targetPath}")
-      moveFile(common.partPath(targetPath), targetPath)
-      # Apply metadata
-      try:
-        setLastModificationTime(targetPath, fromUnix(currentMtime))
-      except CatchableError:
+    proc onFileData(payload: seq[byte]) =
+      ## Handle a data chunk during directory download; writes or discards.
+      if skipCurrent:
         discard
-      try:
-        setFilePermissions(targetPath, currentPerms)
-      except CatchableError:
-        discard
-      clearProgress()
-      echo errors.encodeClient(icDone, details=fmt"{targetPath} ({formatBytes(totalBytes)})")
-      fileOpen = false
+      elif fileOpen and partFile != nil and payload.len > 0:
+        directoryDownloadHasher.update(payload)
+        try:
+          discard partFile.writeBytes(payload, 0, payload.len)
+        except OSError as e:
+          let ec = errors.osErrorToCode(e, ecWriteFail)
+          if partFile != nil:
+            partFile.close()
+          discard tryRemoveFile(common.partPath(targetPath))
+          asyncCheck sess.sendRecord(ErrorRec.uint8, @[toByte(ec)])
+          raise newException(CatchableError, errors.encodeClient(ec))
+        receivedBytes += payload.len.int64
+        receivedBytesAll += payload.len.int64
+        printProgress2("downloading", extractFilename(targetPath), receivedBytes, totalBytes, startMs)
 
-  proc onServerError(payload: seq[byte]) =
-    ## Handle server ErrorRec during directory download, cleaning up state.
-    if fileOpen and partFile != nil:
-      partFile.close()
-      discard tryRemoveFile(common.partPath(targetPath))
-    var ec = ecUnknown
-    if payload.len == 1: ec = fromByte(payload[0])
-    raise newException(CatchableError, errors.encodeClient(ec))
+    proc onFileClose(payload: seq[byte]) {.async.} =
+      ## Complete the current file during directory download.
+      if skipCurrent:
+        clearProgress()
+        skipCurrent = false
+        fileOpen = false
+      elif fileOpen and partFile != nil:
+        partFile.close()
+        if payload.len != 32:
+          await sess.sendRecord(ErrorRec.uint8, @[toByte(ecChecksum)])
+          discard tryRemoveFile(common.partPath(targetPath))
+          clearProgress()
+          raise newException(CatchableError, fmt"checksum mismatch: {targetPath}")
+        let dig2 = directoryDownloadHasher.digest()
+        var match = dig2.len == 32
+        if match:
+          for i in 0 ..< 32:
+            if dig2[i] != payload[i]: match = false
+        if not match:
+          await sess.sendRecord(ErrorRec.uint8, @[toByte(ecChecksum)])
+          discard tryRemoveFile(common.partPath(targetPath))
+          clearProgress()
+          raise newException(CatchableError, fmt"checksum mismatch: {targetPath}")
+        if fileExists(targetPath):
+          discard tryRemoveFile(fmt"{targetPath}.part")
+          clearProgress()
+          raise newException(CatchableError, fmt"file exists: {targetPath}")
+        moveFile(common.partPath(targetPath), targetPath)
+        # Apply metadata
+        try:
+          setLastModificationTime(targetPath, fromUnix(currentMtime))
+        except CatchableError:
+          discard
+        try:
+          setFilePermissions(targetPath, currentPerms)
+        except CatchableError:
+          discard
+        clearProgress()
+        echo errors.encodeClient(icDone, details=fmt"{targetPath} ({formatBytes(totalBytes)})")
+        fileOpen = false
 
-  # Phase: main receive loop
-  while true:
-    let (t, payload) = await sess.recvRecord()
-    if t == 0'u8:
+    proc onServerError(payload: seq[byte]) =
+      ## Handle server ErrorRec during directory download, cleaning up state.
       if fileOpen and partFile != nil:
         partFile.close()
-        discard tryRemoveFile(fmt"{targetPath}.part")
-      raise newException(CatchableError, "connection closed by server during directory download")
-    case t
-    of uint8(PathOpen):
-      let (relativePath, fileSize, mtimeU, perms) = parsePathOpen(payload)
-      let fullPath = (if dirExists(localDest): normalizedPath(localDest / relativePath) else: localDest)
-      let existsLocally = fileExists(fullPath)
-      if existsLocally:
-        var b: array[1, byte]
-        b[0] = byte(SkipReason.srExists)
-        await sess.sendRecord(PathSkip.uint8, b)
-        skipCurrent = true
-        if skipExisting:
-          echo errors.encodeClient(icSkipped, details=fmt"{fullPath} ({formatBytes(fileSize)})")
+        discard tryRemoveFile(common.partPath(targetPath))
+      var ec = ecUnknown
+      if payload.len == 1: ec = fromByte(payload[0])
+      raise newException(CatchableError, errors.encodeClient(ec))
+
+    # Phase: main receive loop
+    while true:
+      let (t, payload) = await sess.recvRecord()
+      if t == 0'u8:
+        if fileOpen and partFile != nil:
+          partFile.close()
+          discard tryRemoveFile(fmt"{targetPath}.part")
+        raise newException(CatchableError, "connection closed by server during directory download")
+      case t
+      of uint8(PathOpen):
+        let (relativePath, fileSize, mtimeU, perms) = parsePathOpen(payload)
+        let fullPath = (if dirExists(localDest): normalizedPath(localDest / relativePath) else: localDest)
+        let existsLocally = fileExists(fullPath)
+        if existsLocally:
+          var b: array[1, byte]
+          b[0] = byte(SkipReason.srExists)
+          await sess.sendRecord(PathSkip.uint8, b)
+          skipCurrent = true
+          if skipExisting:
+            echo errors.encodeClient(icSkipped, details=fmt"{fullPath} ({formatBytes(fileSize)})")
+          else:
+            pendingErr = fmt"{errFileExists}{fullPath}"
+          continue
         else:
-          pendingErr = fmt"{errFileExists}{fullPath}"
-        continue
-      else:
-        await sess.sendRecord(PathAccept.uint8, newSeq[byte]())
-        startNewFile(relativePath, fileSize)
-        currentMtime = mtimeU
-        currentPerms = perms
-    of uint8(FileData): onFileData(payload)
-    of uint8(FileClose): await onFileClose(payload)
-    of uint8(DownloadDone):
-      if pendingErr.len > 0:
-        # Surface the local error after telling server to skip
-        raise newException(CatchableError, pendingErr)
-      if payload.len == 1:
-        let sc = fromByteSc(payload[0])
-        echo errors.encodeClient(sc)
-      else:
-        echo errors.encodeClient(icTransferred, details=fmt"{fileCount} file(s), {formatBytes(receivedBytesAll)}")
-      break
-    of uint8(ErrorRec): onServerError(payload)
-    else: discard
+          await sess.sendRecord(PathAccept.uint8, newSeq[byte]())
+          startNewFile(relativePath, fileSize)
+          currentMtime = mtimeU
+          currentPerms = perms
+      of uint8(FileData): onFileData(payload)
+      of uint8(FileClose): await onFileClose(payload)
+      of uint8(DownloadDone):
+        if pendingErr.len > 0:
+          # Surface the local error after telling server to skip
+          raise newException(CatchableError, pendingErr)
+        if payload.len == 1:
+          let sc = fromByteSc(payload[0])
+          echo errors.encodeClient(sc)
+        else:
+          echo errors.encodeClient(icTransferred, details=fmt"{fileCount} file(s), {formatBytes(receivedBytesAll)}")
+        break
+      of uint8(ErrorRec): onServerError(payload)
+      else: discard
 
   for remotePath in remotePaths:
     await downloadPath(remotePath)
