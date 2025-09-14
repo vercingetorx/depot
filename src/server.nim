@@ -48,7 +48,7 @@ proc handleClient*(sock: AsyncSocket, baseDir: string) {.async.} =
   proc infoSid(msg: string) = info fmt"[{sid}] {msg}"
   proc errorSid(msg: string) = error fmt"[{sid}] {msg}"
 
-  infoSid(errors.encodeServer(icClientConnected, details=$getPeerAddr(sock)))
+  infoSid(errors.encodeServer(icClientConnected, details=fmt"{getPeerAddr(sock)}"))
   # Perform handshake; if it fails, log and close this client without
   # impacting the main accept loop.
   var session: Session
