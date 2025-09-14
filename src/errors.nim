@@ -220,6 +220,22 @@ proc clientMessage*(c: InfoCode): string =
   of icSkipped: "skipped"
   of icTransferred: "transferred"
   of icListItem: ""
+  of icClientConnected: "client connected"
+  of icClientDisconnected: "client disconnected"
+  of icHandshakeComplete: "handshake complete"
+  of icUploadStart: "upload start"
+  of icRekeyPropose: "rekey propose"
+  of icClientSkipped: "client skipped"
+  of icUnexpectedAck: "unexpected ack"
+  of icSendFile: "send file"
+  of icSendComplete: "send complete"
+  of icDownloadRequest: "download request"
+  of icDownloadRequestDir: "download request (dir)"
+  of icListFile: "list file"
+  of icListDir: "list dir"
+  of icTimeoutClose: "session timeout"
+  of icSessionError: "session error"
+  of icSessionIoError: "session I/O error"
 
 proc serverMessage*(c: ErrorCode): string =
   case c
