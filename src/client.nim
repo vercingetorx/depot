@@ -14,6 +14,8 @@ when defined(windows): import winlean
 const bufSize = 1024 * 1024 # 1 MiB (matches server bufSize for throughput)
 
 type UploadExists* = object of CatchableError
+type Disconnect* = object of CatchableError
+type FatalError* = object of CatchableError
 
 ## Shared helpers and record types are imported from depot/common and depot/records
 
@@ -73,7 +75,7 @@ proc uploadFile*(sess: Session, srcPath, relDest: string) {.async.} =
     await sess.sendRecord(UploadOpen.uint8, openPayload)
     let (t, payload) = await sess.recvRecord()
     if t == 0'u8:
-      raise newException(CatchableError, "connection closed by server during upload open")
+      raise newException(FatalError, "connection closed by server during upload open")
     if t == UploadFail.uint8:
       var ec = ecUnknown
       if payload.len == 1: ec = fromByte(payload[0])
@@ -110,7 +112,7 @@ proc uploadFile*(sess: Session, srcPath, relDest: string) {.async.} =
     clearProgress()
     let (t, payload) = await sess.recvRecord()
     if t == 0'u8:
-      raise newException(CatchableError, "connection closed by server after file data")
+      raise newException(FatalError, "connection closed by server after file data")
     if t == ErrorRec.uint8:
       var ec = ecUnknown
       if payload.len == 1: ec = fromByte(payload[0])
@@ -312,9 +314,10 @@ proc uploadPaths*(sess: Session, sources: seq[string], remoteDir: string, skipEx
 
   # Phase: helpers for each upload unit
   proc uploadSingleFile(path: string) {.async.} =
-    let destRel = fmt"{base}{extractFilename(path)}"
+    let root = absolutePath(path)
+    let relativeSubpath = path.relativePath(root)
     try:
-      await uploadFile(sess, path, destRel)
+      await uploadFile(sess, path, relativeSubpath)
       sentAllBytes += getFileSize(path)
       inc succeeded
       echo fmt"done {path} ({formatBytes(getFileSize(path))})"
@@ -325,9 +328,6 @@ proc uploadPaths*(sess: Session, sources: seq[string], remoteDir: string, skipEx
       else:
         stderr.writeLine(e.msg)
         inc failed
-    except CatchableError as e:
-      stderr.writeLine(e.msg)
-      inc failed
     except OSError as e:
       stderr.writeLine(e.msg)
       inc failed
@@ -338,11 +338,11 @@ proc uploadPaths*(sess: Session, sources: seq[string], remoteDir: string, skipEx
     for p in walkDirRec(rootPath):
       if dirExists(p): continue
       let relativeSubpath = p.relativePath(root)
-      let destRel = fmt"{base}{topName}/{relativeSubpath.replace(DirSep, '/')}"
       try:
-        await uploadFile(sess, p, destRel)
+        await uploadFile(sess, p, relativeSubpath)
         sentAllBytes += getFileSize(p)
         inc succeeded
+        clearProgress()
         echo fmt"done {p} ({formatBytes(getFileSize(p))})"
       except UploadExists as e:
         if skipExisting:
@@ -351,21 +351,23 @@ proc uploadPaths*(sess: Session, sources: seq[string], remoteDir: string, skipEx
         else:
           stderr.writeLine(e.msg)
           inc failed
-      except CatchableError as e:
-        stderr.writeLine(e.msg)
-        inc failed
       except OSError as e:
         stderr.writeLine(e.msg)
         inc failed
 
   # Phase: dispatch by source type
   for src in sources:
-    if dirExists(src):
-      await uploadDirTree(src)
-    elif fileExists(src):
-      await uploadSingleFile(src)
-    else:
-      stderr.writeLine(fmt"not found: {src}")
+    try:
+      if dirExists(src):
+        await uploadDirTree(src)
+      elif fileExists(src):
+        await uploadSingleFile(src)
+      else:
+        stderr.writeLine(fmt"not found: {src}")
+    except FatalError as e:
+      stderr.writeLine(fmt"{e.msg}: {src}")
+      stderr.writeLine("aborting...")
+      break
 
   # Phase: summary
   let skippedSuffix = if skipped > 0: fmt", skipped {skipped}" else: ""
