@@ -317,11 +317,11 @@ proc handleClient*(sock: AsyncSocket, baseDir: string) {.async.} =
             codeName = reasonUnknown
           # Suppress logs for list operations (handled via List* records now)
           if codeName != reasonFilter:
-             infoSid(errors.encodeServer(icClientSkipped, details=fmt"{relativePath} (reason: {codeName})"))
+            infoSid(errors.encodeServer(icClientSkipped, details=fmt"{relativePath} (reason: {codeName})"))
           return
         elif atk == 0'u8:
           # Unexpected/empty ack; do not fail silently. Log and treat as skip.
-           infoSid(errors.encodeServer(icUnexpectedAck, details="type=0"))
+          infoSid(errors.encodeServer(icUnexpectedAck, details="type=0"))
           return
         elif atk != PathAccept.uint8:
           var codeName = reasonUnknown
@@ -337,10 +337,10 @@ proc handleClient*(sock: AsyncSocket, baseDir: string) {.async.} =
             of byte(SkipReason.srTimeout): codeName = reasonTimeout
             else: discard
           if codeName != reasonFilter:
-             infoSid(errors.encodeServer(icUnexpectedAck, details=fmt"type={atk}, reason: {codeName}"))
+            infoSid(errors.encodeServer(icUnexpectedAck, details=fmt"type={atk}, reason: {codeName}"))
           return
       # Only announce send after explicit accept
-       infoSid(errors.encodeServer(icSendFile, details=fmt"{relativePath} ({fileSize} bytes)"))
+      infoSid(errors.encodeServer(icSendFile, details=fmt"{relativePath} ({fileSize} bytes)"))
       try:
         var f = open(absPath, fmRead)
         defer: f.close()
@@ -354,19 +354,19 @@ proc handleClient*(sock: AsyncSocket, baseDir: string) {.async.} =
           await session.sendRecord(FileData.uint8, buf.toOpenArray(0, n-1))
         let dig = fileSendHasher.digest()
         await session.sendRecord(FileClose.uint8, dig)
-         infoSid(errors.encodeServer(icSendComplete, details=relativePath))
+        infoSid(errors.encodeServer(icSendComplete, details=relativePath))
       except OSError as e:
         let ec = errors.osErrorToCode(e, ecReadFail)
         errorSid(errors.encodeServer(ec, details=e.msg))
         await session.sendRecord(ErrorRec.uint8, @[toByte(ec)])
 
     if fileExists(absReq):
-       infoSid(errors.encodeServer(icDownloadRequest, details=relReqFull))
+      infoSid(errors.encodeServer(icDownloadRequest, details=relReqFull))
       let relativePath = if absReq.isRelativeTo(exportDir): absReq.relativePath(exportDir).replace(DirSep, '/') else: relReqFull
       await streamFileIfAccepted(relativePath)
       await session.sendRecord(DownloadDone.uint8, @[toByte(scDownloadDone)])
     elif dirExists(absReq):
-       infoSid(errors.encodeServer(icDownloadRequestDir, details=relReqFull))
+      infoSid(errors.encodeServer(icDownloadRequestDir, details=relReqFull))
       let base = absReq
       var count = 0
       for p in walkDirRec(base):
