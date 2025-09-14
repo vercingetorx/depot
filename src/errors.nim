@@ -42,6 +42,11 @@ const
   reasonUploadDone* = "upload-done"
   reasonDownloadDone* = "download-done"
   reasonListDone* = "list-done"
+  reasonDone* = "done"
+  reasonSkip* = "skipped"
+  reasonTransfer* = "transferred"
+  reasonList* = "list-item"
+  reasonAbort* = "aborting"
 
 type
   ErrorCode* = enum
@@ -63,11 +68,19 @@ type
     ecConfig
     ecCompat
     ecAuth
+    ecSourceNotFound
+    ecFatal
+    ecAborting
   SuccessCode* = enum
     scUploadOk = 0'u8
     scUploadDone
     scDownloadDone
     scListDone
+  InfoCode* = enum
+    icDone = 0'u8
+    icSkipped
+    icTransferred
+    icListItem
 
 proc codeName*(c: ErrorCode): string =
   case c
@@ -88,6 +101,9 @@ proc codeName*(c: ErrorCode): string =
   of ecConfig: reasonConfig
   of ecCompat: reasonCompat
   of ecAuth: reasonAuth
+  of ecSourceNotFound: reasonNotFound
+  of ecFatal: reasonUnknown
+  of ecAborting: reasonAbort
   else: reasonUnknown
 
 proc codeName*(c: SuccessCode): string =
@@ -96,6 +112,13 @@ proc codeName*(c: SuccessCode): string =
   of scUploadDone: reasonUploadDone
   of scDownloadDone: reasonDownloadDone
   of scListDone: reasonListDone
+
+proc codeName*(c: InfoCode): string =
+  case c
+  of icDone: reasonDone
+  of icSkipped: reasonSkip
+  of icTransferred: reasonTransfer
+  of icListItem: reasonList
 
 proc toByte*(c: ErrorCode): byte = byte(c)
 proc fromByte*(b: byte): ErrorCode =
@@ -106,6 +129,11 @@ proc toByte*(c: SuccessCode): byte = byte(c)
 proc fromByteSc*(b: byte): SuccessCode =
   let v = uint8(b)
   if v <= uint8(high(SuccessCode)): SuccessCode(v) else: scUploadOk
+
+proc toByte*(c: InfoCode): byte = byte(c)
+proc fromByteIc*(b: byte): InfoCode =
+  let v = uint8(b)
+  if v <= uint8(high(InfoCode)): InfoCode(v) else: icDone
 
 proc clientMessage*(c: ErrorCode): string =
   case c
@@ -126,6 +154,9 @@ proc clientMessage*(c: ErrorCode): string =
   of ecConfig: "server misconfigured"
   of ecCompat: "incompatible client/server"
   of ecAuth: "authentication required or failed"
+  of ecSourceNotFound: "source not found"
+  of ecFatal: "fatal error"
+  of ecAborting: "aborting"
   else: "error"
 
 proc clientMessage*(c: SuccessCode): string =
@@ -134,6 +165,13 @@ proc clientMessage*(c: SuccessCode): string =
   of scUploadDone: "upload done"
   of scDownloadDone: "download done"
   of scListDone: "list done"
+
+proc clientMessage*(c: InfoCode): string =
+  case c
+  of icDone: "done"
+  of icSkipped: "skipped"
+  of icTransferred: "transferred"
+  of icListItem: ""
 
 proc serverMessage*(c: ErrorCode): string =
   case c
@@ -154,6 +192,9 @@ proc serverMessage*(c: ErrorCode): string =
   of ecConfig: "server configuration error"
   of ecCompat: "feature/version mismatch"
   of ecAuth: "client authentication error"
+  of ecSourceNotFound: "source not found"
+  of ecFatal: "fatal error"
+  of ecAborting: "aborting"
   else: "unknown"
 
 proc serverMessage*(c: SuccessCode): string =
@@ -163,10 +204,22 @@ proc serverMessage*(c: SuccessCode): string =
   of scDownloadDone: "download done"
   of scListDone: "list done"
 
+proc serverMessage*(c: InfoCode): string =
+  case c
+  of icDone: "done"
+  of icSkipped: "skipped"
+  of icTransferred: "transferred"
+  of icListItem: "list item"
+
 import std/strformat
 
 proc encodeClient*(c: ErrorCode): string = fmt"[{codeName(c)}] {clientMessage(c)}"
 proc encodeClient*(c: SuccessCode): string = fmt"[{codeName(c)}] {clientMessage(c)}"
+proc encodeClient*(c: InfoCode, details: string = ""): string =
+  var msg = fmt"[{codeName(c)}] {clientMessage(c)}"
+  if details.len > 0:
+    msg.add(fmt": {details}")
+  msg
 
 proc encodeServer*(c: ErrorCode, details: string = ""): string =
   var msg = fmt"[{codeName(c)}] {serverMessage(c)}"

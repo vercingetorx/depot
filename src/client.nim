@@ -329,16 +329,16 @@ proc uploadPaths*(sess: Session, sources: seq[string], remoteDir: string, skipEx
       await uploadFile(sess, path, relativeSubpath)
       sentAllBytes += getFileSize(path)
       inc succeeded
-      echo fmt"done {path} ({formatBytes(getFileSize(path))})"
+      echo errors.encodeClient(icDone, details=fmt"{path} ({formatBytes(getFileSize(path))})")
     except UploadExists as e:
       if skipExisting:
-        echo fmt"skip existing {path}"
+        echo errors.encodeClient(icSkipped, details=path)
         inc skipped
       else:
-        stderr.writeLine(e.msg)
+        stderr.writeLine(errors.encodeClient(ecExists, details=e.msg))
         inc failed
     except OSError as e:
-      stderr.writeLine(e.msg)
+      stderr.writeLine(errors.encodeClient(ecFatal, details=e.msg))
       inc failed
 
   proc uploadDirTree(rootPath: string) {.async.} =
@@ -352,16 +352,16 @@ proc uploadPaths*(sess: Session, sources: seq[string], remoteDir: string, skipEx
         sentAllBytes += getFileSize(p)
         inc succeeded
         clearProgress()
-        echo fmt"done {p} ({formatBytes(getFileSize(p))})"
+        echo errors.encodeClient(icDone, details=fmt"{p} ({formatBytes(getFileSize(p))})")
       except UploadExists as e:
         if skipExisting:
-          echo fmt"skip existing {p}"
+          echo errors.encodeClient(icSkipped, details=p)
           inc skipped
         else:
-          stderr.writeLine(e.msg)
+          stderr.writeLine(errors.encodeClient(ecExists, details=e.msg))
           inc failed
       except OSError as e:
-        stderr.writeLine(e.msg)
+        stderr.writeLine(errors.encodeClient(ecFatal, details=e.msg))
         inc failed
 
   # Phase: dispatch by source type
@@ -372,15 +372,15 @@ proc uploadPaths*(sess: Session, sources: seq[string], remoteDir: string, skipEx
       elif fileExists(src):
         await uploadSingleFile(src)
       else:
-        stderr.writeLine(fmt"not found: {src}")
+        stderr.writeLine(errors.encodeClient(ecSourceNotFound, details=src))
     except FatalError as e:
-      stderr.writeLine(fmt"{e.msg}: {src}")
-      stderr.writeLine("aborting...")
+      stderr.writeLine(errors.encodeClient(ecFatal, details=fmt"{e.msg}: {src}"))
+      stderr.writeLine(errors.encodeClient(ecAborting))
       break
 
   # Phase: summary
   let skippedSuffix = if skipped > 0: fmt", skipped {skipped}" else: ""
-  echo fmt"Transferred {succeeded}/{totalFiles} file(s), {formatBytes(sentAllBytes)}{skippedSuffix}"
+  echo errors.encodeClient(icTransferred, details=fmt"{succeeded}/{totalFiles} file(s), {formatBytes(sentAllBytes)}{skippedSuffix}")
   if failed > 0:
     quit(1)
 
@@ -435,7 +435,7 @@ proc downloadTo*(sess: Session, remotePath: string, localDest: string, skipExist
       else:
         raise newException(CatchableError, "destination is a file but multiple files requested")
     if skipExisting and fileExists(targetPath):
-      echo fmt"skip existing {targetPath} ({formatBytes(totalBytes)})"
+      echo errors.encodeClient(icSkipped, details=fmt"{targetPath} ({formatBytes(totalBytes)})")
       skipCurrent = true
     else:
       partFile = open(common.partPath(targetPath), fmWrite)
@@ -504,7 +504,7 @@ proc downloadTo*(sess: Session, remotePath: string, localDest: string, skipExist
       except CatchableError:
         discard
       clearProgress()
-      echo fmt"done {targetPath} ({formatBytes(totalBytes)})"
+      echo errors.encodeClient(icDone, details=fmt"{targetPath} ({formatBytes(totalBytes)})")
       fileOpen = false
 
   proc onServerError(payload: seq[byte]) =
@@ -535,7 +535,7 @@ proc downloadTo*(sess: Session, remotePath: string, localDest: string, skipExist
         await sess.sendRecord(PathSkip.uint8, b)
         skipCurrent = true
         if skipExisting:
-          echo fmt"skip existing {fullPath} ({formatBytes(fileSize)})"
+          echo errors.encodeClient(icSkipped, details=fmt"{fullPath} ({formatBytes(fileSize)})")
         else:
           pendingErr = fmt"{errFileExists}{fullPath}"
         continue
@@ -553,7 +553,7 @@ proc downloadTo*(sess: Session, remotePath: string, localDest: string, skipExist
       if payload.len == 1:
         let sc = fromByteSc(payload[0])
         echo errors.encodeClient(sc)
-      echo fmt"Transferred {fileCount} file(s), {formatBytes(receivedBytesAll)}"
+      echo errors.encodeClient(icTransferred, details=fmt"{fileCount} file(s), {formatBytes(receivedBytesAll)}")
       break
     of uint8(ErrorRec): onServerError(payload)
     else: discard
@@ -578,7 +578,7 @@ proc listRemote*(sess: Session, remotePath: string) {.async.} =
       let items = parseListChunk(payload)
       for it in items:
         let kindStr = if it.kind == 1'u8: "[dir] " else: ""
-        echo kindStr, it.relativePath, " (", formatBytes(it.fileSize), ")"
+        echo errors.encodeClient(icListItem, details=fmt"{kindStr}{it.relativePath} ({formatBytes(it.fileSize)})")
     of uint8(ListDone):
       if payload.len == 1:
         let sc = fromByteSc(payload[0])
