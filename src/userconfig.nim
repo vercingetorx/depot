@@ -1,30 +1,34 @@
 import std/[os, parsecfg, streams, strutils]
 
 type
+  ## Server-side defaults loaded from config with sensible fallbacks.
   ServerDefaults* = object
-    listen*: string
-    port*: int
-    base*: string
-    sandbox*: bool
-    psk*: string
-    requireClientAuth*: bool
+    listen*: string             ## IP address to bind (e.g., 0.0.0.0)
+    port*: int                  ## TCP port
+    base*: string               ## Base directory used for depot roots
+    sandbox*: bool              ## Whether server enforces sandboxed paths
+    psk*: string                ## Optional pre-shared key (binds handshake)
+    requireClientAuth*: bool    ## Require client identity pinning/auth
+  ## Client-side defaults loaded from config with sensible fallbacks.
   ClientDefaults* = object
-    host*: string
-    port*: int
-    log*: string
-    base*: string
-    psk*: string
+    host*: string               ## Default server host for CLI
+    port*: int                  ## Default server port for CLI
+    log*: string                ## Default log level for CLI
+    base*: string               ## Default local base directory
+    psk*: string                ## Optional pre-shared key
 
 proc configPath*(): string =
   ## Return the path to the user's depot configuration file.
   getEnv("XDG_CONFIG_HOME", getEnv("HOME") / ".config") / "depot" / "depot.conf"
 
 proc parseBool(s: string): bool =
+  ## Parse a common set of boolean string forms.
   let v = s.toLowerAscii()
   v in ["1", "true", "yes", "on"]
 
 proc readConfig*(): tuple[server: ServerDefaults, client: ClientDefaults] =
   ## Load configuration from configPath(), overlaying hard defaults.
+  ## Unknown keys are ignored to allow forward-compatible additions.
   # Hard defaults
   result.server.listen = "0.0.0.0"
   result.server.port = 60006
@@ -42,6 +46,7 @@ proc readConfig*(): tuple[server: ServerDefaults, client: ClientDefaults] =
   if not fileExists(path):
     return
 
+  # Parse INI-like config using std/parsecfg
   var fs = newFileStream(path, fmRead)
   if fs.isNil: return
   var p: CfgParser
@@ -54,6 +59,7 @@ proc readConfig*(): tuple[server: ServerDefaults, client: ClientDefaults] =
     of cfgSectionStart:
       section = e.section
     of cfgKeyValuePair:
+      # Apply recognized keys in a section-scoped switch
       case section
       of "Server":
         case e.key.toLowerAscii()
