@@ -29,13 +29,6 @@ proc ensureBaseDirs*(base: string): tuple[exportDir, importDir: string] =
   # Create parent chain proactively; treat failure as fatal
   createDir(exportDir)
   createDir(importDir)
-  # BUG: existsOrCreateDir was creating exportDir/importDir but returning false
-  # discard existsOrCreateDir(base)
-  # discard existsOrCreateDir(depotRoot)
-  # if existsOrCreateDir(exportDir) == false:
-  #   raise newException(CatchableError, fmt"failed to create export directory: {exportDir}")
-  # if existsOrCreateDir(importDir) == false:
-  #   raise newException(CatchableError, fmt"failed to create import directory: {importDir}")
   return (exportDir, importDir)
 
 ## String/byte helpers moved to depot/common.nim
