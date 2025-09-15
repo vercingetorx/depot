@@ -48,35 +48,19 @@ proc handleClient*(sock: AsyncSocket, baseDir: string) {.async.} =
   proc infoSid(msg: string) = info fmt"[{sid}] {msg}"
   proc errorSid(msg: string) = error fmt"[{sid}] {msg}"
 
-  infoSid(fmt"client connected: {getPeerAddr(sock)}")
+  infoSid(errors.encodeOk(errors.scConnected, fmt"client connected: {getPeerAddr(sock)}"))
   # Perform handshake; if it fails, log and close this client without
   # impacting the main accept loop.
   var session: Session
   try:
     session = await serverHandshake(sock, sandboxed)
-  except CatchableError as e:
-    # Convert client-coded handshake message to server-coded log line and include details
-    let (codeStr, text) = errors.splitReason(e.msg)
-    var ec = ecUnknown
-    if codeStr.len > 0:
-      case codeStr
-      of reasonBadPayload: ec = ecBadPayload
-      of reasonCompat: ec = ecCompat
-      of reasonAuth: ec = ecAuth
-      of reasonConfig: ec = ecConfig
-      of reasonTimeout: ec = ecTimeout
-      of reasonNotFound: ec = ecNotFound
-      of reasonPerms: ec = ecPerms
-      of reasonNoSpace: ec = ecNoSpace
-      else: ec = ecUnknown
-    var logMsg = errors.encodeServer(ec)
-    if text.len > 0:
-      logMsg = fmt"{logMsg}: {text}"
+  except handshake.HandshakeError as e:
+    let logMsg = if e.msg.len > 0: fmt"{errors.encodeServer(e.code)}: {e.msg}" else: errors.encodeServer(e.code)
     errorSid(logMsg)
     try: sock.close() except: discard
-    infoSid("client disconnected")
+    infoSid(errors.encodeOk(errors.scDisconnected, "client disconnected"))
     return
-  infoSid("handshake complete")
+  infoSid(errors.encodeOk(errors.scHandshake, "handshake complete"))
   let (exportDir, importDir) = ensureBaseDirs(baseDir)
   # Phase: mutable transfer state (per-connection)
   var currentFile: File
@@ -92,6 +76,54 @@ proc handleClient*(sock: AsyncSocket, baseDir: string) {.async.} =
   proc sendErrorCode(ec: ErrorCode) {.async.} =
     ## Send an application ErrorRec with a single error code byte.
     await session.sendRecord(ErrorRec.uint8, @[toByte(ec)])
+
+  proc replyError(ec: ErrorCode, context: string = "") {.async.} =
+    ## Log a server-coded error and send an ErrorRec with that code.
+    if context.len > 0:
+      errorSid(fmt"{errors.encodeServer(ec)}: {context}")
+    else:
+      errorSid(errors.encodeServer(ec))
+    await session.sendRecord(ErrorRec.uint8, @[toByte(ec)])
+
+  # Focused helpers for non-recursive listing
+  proc listSingleFile(absReq: string, relReqFull: string) {.async.} =
+    let relativePath = if absReq.isRelativeTo(exportDir): absReq.relativePath(exportDir).replace(DirSep, '/') else: relReqFull
+    let size = getFileSize(absReq)
+    var buf = newSeq[byte]()
+    let item = protocol.encodeListItem(relativePath, int64(size), 0'u8)
+    buf.add(item)
+    await session.sendRecord(ListChunk.uint8, buf)
+    await session.sendRecord(ListDone.uint8, newSeq[byte]())
+    infoSid(errors.encodeOk(errors.scListFile, fmt"{relReqFull}"))
+
+  proc listDirectory(absReq: string, relReqFull: string) {.async.} =
+    infoSid(errors.encodeOk(errors.scListDir, fmt"{relReqFull}"))
+    var chunk = newSeq[byte]()
+    var count = 0
+    for it in walkDir(absReq):
+      let p = it.path
+      let isDir = (it.kind == pcDir)
+      if isDir:
+        let relativePath = p.relativePath(absReq).replace(DirSep, '/')
+        let item = protocol.encodeListItem(relativePath, 0'i64, 1'u8)
+        if chunk.len + item.len > 64*1024:
+          await session.sendRecord(ListChunk.uint8, chunk)
+          chunk.setLen(0)
+        chunk.add(item)
+        inc count
+      else:
+        let relativePath = p.relativePath(absReq).replace(DirSep, '/')
+        let size = getFileSize(p)
+        let item = protocol.encodeListItem(relativePath, int64(size), 0'u8)
+        if chunk.len + item.len > 64*1024:
+          await session.sendRecord(ListChunk.uint8, chunk)
+          chunk.setLen(0)
+        chunk.add(item)
+        inc count
+    if chunk.len > 0:
+      await session.sendRecord(ListChunk.uint8, chunk)
+    await session.sendRecord(ListDone.uint8, newSeq[byte]())
+    infoSid(errors.encodeOk(errors.scListComplete, fmt"{relReqFull} ({count} entries)"))
 
   ## Begin an upload session for a single file. Validates path against
   ## sandbox rules, creates the parent directory, opens a .part file,
@@ -121,7 +153,7 @@ proc handleClient*(sock: AsyncSocket, baseDir: string) {.async.} =
         destAbs = normalizedPath(importDir / relativeDestPath)
     currentPath = destAbs
     partialPath = common.partPath(currentPath)
-    infoSid(fmt"upload start: {relativeDestPath}")
+    infoSid(errors.encodeOk(errors.scUploadStart, fmt"upload start: {relativeDestPath}"))
     uploadHasher = newBlake2bCtx(digestSize=32)
     pendingMtimeUnix = srcMtimeUnix
     pendingPermissions = srcPerms
@@ -213,7 +245,7 @@ proc handleClient*(sock: AsyncSocket, baseDir: string) {.async.} =
             setFilePermissions(currentPath, pendingPermissions)
           except CatchableError:
             discard
-          infoSid(fmt"upload complete: {currentPath}")
+          infoSid(errors.encodeOk(errors.scUploadComplete, fmt"{currentPath}"))
           await session.sendRecord(UploadDone.uint8, newSeq[byte]())
         except OSError as e:
           let ec = errors.osErrorToCode(e, ecOpenFail)
@@ -233,32 +265,25 @@ proc handleClient*(sock: AsyncSocket, baseDir: string) {.async.} =
     # payload: varint path len | path bytes
     let (relReqFull, nextIdx) = decodePathParam(payload)
     if nextIdx < 0:
-      await session.sendRecord(ErrorRec.uint8, @[toByte(ecBadPayload)]); return
+      await replyError(ecBadPayload, "decode path"); return
     if relReqFull.len == 0:
-      await session.sendRecord(ErrorRec.uint8, @[toByte(ecBadPath)]); return
+      await replyError(ecBadPath, "empty path"); return
     var absReq: string
     if sandboxed:
       if relReqFull.len > 0 and relReqFull[0] == '/':
-        errorSid(errors.encodeServer(ecAbsolute))
-        await session.sendRecord(ErrorRec.uint8, @[toByte(ecAbsolute)])
-        return
+        await replyError(ecAbsolute, relReqFull); return
       try:
         absReq = cleanJoin(exportDir, relReqFull)
       except CatchableError:
-        errorSid(errors.encodeServer(ecUnsafePath))
-        await session.sendRecord(ErrorRec.uint8, @[toByte(ecUnsafePath)])
-        return
+        await replyError(ecUnsafePath, relReqFull); return
     else:
       if relReqFull.len > 0 and relReqFull[0] == '/':
         absReq = normalizedPath(relReqFull)
       else:
         absReq = normalizedPath(exportDir / relReqFull)
     
-    ## Send a single file to the client. Sends PathOpen with path/size,
-    ## waits for PathAccept/PathSkip, then streams FileData + FileClose
-    ## on accept. Logs send start/complete lines.
-    proc streamFileIfAccepted(relativePath: string) {.async.} =
-      # Opportunistic time-based rekey at file boundary
+    # Focused helpers for sending data to the client
+    proc proposeRekeyIfNeeded() {.async.} =
       if (common.monoMs() - session.lastRekeyMs) > session.rekeyIntervalMs and session.pendingEpoch == 0'u32:
         var epochBytes: array[4, byte]
         let newEpoch = session.epoch + 1'u32
@@ -266,84 +291,52 @@ proc handleClient*(sock: AsyncSocket, baseDir: string) {.async.} =
         epochBytes[1] = byte((newEpoch shr 8) and 0xff)
         epochBytes[2] = byte((newEpoch shr 16) and 0xff)
         epochBytes[3] = byte((newEpoch shr 24) and 0xff)
-        # derive pending keys for server (Rx=c2s, Tx=s2c)
         let (out1, out2) = handshake.deriveRekey(session.trafficSecret, epochBytes)
         for i in 0 ..< 32: session.pendingKRx[i] = out1[i]
         for i in 0 ..< 16: session.pendingPRx[i] = out1[32 + i]
         for i in 0 ..< 32: session.pendingKTx[i] = out2[i]
         for i in 0 ..< 16: session.pendingPTx[i] = out2[32 + i]
         session.pendingEpoch = newEpoch
-        infoSid(fmt"rekey propose: epoch={newEpoch}")
+        infoSid(errors.encodeOk(errors.scRekey, fmt"propose epoch={newEpoch}"))
         await session.sendRecord(RekeyReq.uint8, epochBytes)
-        # derive pending keys and apply after sending ack (handled in dispatch loop)
-      # Send path + size + metadata in PathOpen payload
-      var absPath: string
-      if sandboxed:
-        absPath = cleanJoin(exportDir, relativePath)
-      else:
-        if relativePath.len > 0 and relativePath[0] == '/':
-          absPath = normalizedPath(relativePath)
-        else:
-          absPath = normalizedPath(exportDir / relativePath)
+
+    proc absFromRel(baseAbs: string, relativePath: string): string =
+      ## Resolve a filesystem path for a file under the requested base directory.
+      ## baseAbs is the directory resolved from the request (under exportDir in sandbox).
+      if relativePath.len > 0 and relativePath[0] == '/':
+        return normalizedPath(relativePath)
+      normalizedPath(baseAbs / relativePath)
+
+    proc awaitAck(relativePath: string): Future[bool] {.async.} =
+      ## Await client ack if negotiated. Logs [skip] with context and returns false on skip.
+      if session.dlAck:
+        let (atk, _) = await session.recvRecord()
+        if atk == PathAccept.uint8: return true
+        if atk == PathSkip.uint8:
+          infoSid(errors.encodeSkip(fmt"client skipped: {relativePath}"))
+          return false
+        infoSid(errors.encodeSkip(fmt"unexpected ack, treating as skip: type={atk}"))
+        return false
+      return true
+
+    proc sendFileToClient(fsRel: string, wireRel: string) {.async.} =
+      ## Stream one file to the client: announce via PathOpen(wireRel),
+      ## await ack, send FileData, then FileClose with checksum.
+      await proposeRekeyIfNeeded()
+      let absPath = absFromRel(absReq, fsRel)
       if not isSafeFile(absPath):
-        errorSid(errors.encodeServer(ecUnsafePath))
-        await session.sendRecord(ErrorRec.uint8, @[toByte(ecUnsafePath)])
+        await replyError(ecUnsafePath, absPath)
         return
       let fileSize = getFileSize(absPath)
-      # Collect metadata for preservation on client
       let mtimeUnix: int64 = int64(getLastModificationTime(absPath).toUnix())
       let permissionSet = getFilePermissions(absPath)
-      let payload = protocol.encodePathOpen(relativePath, int64(fileSize), mtimeUnix, permissionSet)
+      let payload = protocol.encodePathOpen(wireRel, int64(fileSize), mtimeUnix, permissionSet)
       await session.sendRecord(PathOpen.uint8, payload)
-      # Wait for client ack if negotiated
-      if session.dlAck:
-        let (atk, apl) = await session.recvRecord()
-        if atk == PathSkip.uint8:
-          # Expect 1-byte reason code
-          var codeName = reasonUnknown
-          if apl.len == 1:
-            case apl[0]
-            of byte(SkipReason.srExists): codeName = reasonExists
-            of byte(SkipReason.srFilter): codeName = reasonFilter
-            of byte(SkipReason.srAbsolute): codeName = reasonAbsolute
-            of byte(SkipReason.srUnsafePath): codeName = reasonUnsafePath
-            of byte(SkipReason.srBadPayload): codeName = reasonBadPayload
-            of byte(SkipReason.srPerms): codeName = reasonPerms
-            of byte(SkipReason.srNoSpace): codeName = reasonNoSpace
-            of byte(SkipReason.srTimeout): codeName = reasonTimeout
-            else: codeName = reasonUnknown
-          else:
-            codeName = reasonUnknown
-          # Suppress logs for list operations (handled via List* records now)
-          if codeName != reasonFilter:
-            infoSid(fmt"client skipped: {relativePath} (reason: {codeName})")
-          return
-        elif atk == 0'u8:
-          # Unexpected/empty ack; do not fail silently. Log and treat as skip.
-          infoSid("unexpected ack, treating as skip: type=0")
-          return
-        elif atk != PathAccept.uint8:
-          var codeName = reasonUnknown
-          if apl.len == 1:
-            case apl[0]
-            of byte(SkipReason.srExists): codeName = reasonExists
-            of byte(SkipReason.srFilter): codeName = reasonFilter
-            of byte(SkipReason.srAbsolute): codeName = reasonAbsolute
-            of byte(SkipReason.srUnsafePath): codeName = reasonUnsafePath
-            of byte(SkipReason.srBadPayload): codeName = reasonBadPayload
-            of byte(SkipReason.srPerms): codeName = reasonPerms
-            of byte(SkipReason.srNoSpace): codeName = reasonNoSpace
-            of byte(SkipReason.srTimeout): codeName = reasonTimeout
-            else: discard
-          if codeName != reasonFilter:
-            infoSid(fmt"unexpected ack, treating as skip: type={atk}, reason: {codeName}")
-          return
-      # Only announce send after explicit accept
-      infoSid(fmt"send file: {relativePath} ({fileSize} bytes)")
+      if not await awaitAck(wireRel): return
+      infoSid(errors.encodeOk(errors.scSendStart, fmt"{wireRel} ({fileSize} bytes)"))
       try:
         var f = open(absPath, fmRead)
         defer: f.close()
-        # Hasher to compute and send checksum for integrity verification
         var fileSendHasher = newBlake2bCtx(digestSize=32)
         var buf = newSeq[byte](bufSize)
         while true:
@@ -353,33 +346,34 @@ proc handleClient*(sock: AsyncSocket, baseDir: string) {.async.} =
           await session.sendRecord(FileData.uint8, buf.toOpenArray(0, n-1))
         let dig = fileSendHasher.digest()
         await session.sendRecord(FileClose.uint8, dig)
-        infoSid(fmt"send complete: {relativePath}")
+        infoSid(errors.encodeOk(errors.scSendComplete, fmt"{wireRel}"))
       except OSError as e:
         let ec = errors.osErrorToCode(e, ecReadFail)
-        errorSid(errors.encodeServer(ec))
-        await session.sendRecord(ErrorRec.uint8, @[toByte(ec)])
+        await replyError(ec, e.msg)
 
-    if fileExists(absReq):
-      infoSid(fmt"download request: {relReqFull}")
-      let relativePath = if absReq.isRelativeTo(exportDir): absReq.relativePath(exportDir).replace(DirSep, '/') else: relReqFull
-      await streamFileIfAccepted(relativePath)
-      await session.sendRecord(DownloadDone.uint8, newSeq[byte]())
-    elif dirExists(absReq):
-      infoSid(fmt"download request (dir): {relReqFull}")
-      let base = absReq
+    proc sendTreeToClient(baseAbs: string) {.async.} =
       var count = 0
-      for p in walkDirRec(base):
+      let baseName = extractFilename(baseAbs)
+      for p in walkDirRec(baseAbs):
         if dirExists(p): continue
-        # Compute relative path to the requested base dir (not exportRoot),
-        # falling back to relReqFull when not under exportDir.
-        let relativePath = p.relativePath(base).replace(DirSep, '/')
-        await streamFileIfAccepted(relativePath)
+        let fsRel = p.relativePath(baseAbs)
+        let relWithTop = if baseName.len > 0: (baseName & "/" & fsRel) else: fsRel
+        await sendFileToClient(fsRel, common.toWirePath(relWithTop))
         inc count
       await session.sendRecord(DownloadDone.uint8, newSeq[byte]())
-      infoSid(fmt"download directory complete: {relReqFull} ({count} files)")
+      infoSid(errors.encodeOk(errors.scDownloadComplete, fmt"{relReqFull} ({count} files)"))
+
+    if fileExists(absReq):
+      infoSid(errors.encodeOk(errors.scDownloadRequest, fmt"{relReqFull}"))
+      let fsRel = if absReq.isRelativeTo(exportDir): absReq.relativePath(exportDir) else: relReqFull
+      let wireRel = common.toWirePath(fsRel)
+      await sendFileToClient(fsRel, wireRel)
+      await session.sendRecord(DownloadDone.uint8, newSeq[byte]())
+    elif dirExists(absReq):
+      infoSid(errors.encodeOk(errors.scDownloadRequest, fmt"dir {relReqFull}"))
+      await sendTreeToClient(absReq)
     else:
-      errorSid(errors.encodeServer(ecNotFound))
-      await session.sendRecord(ErrorRec.uint8, @[toByte(ecNotFound)])
+      await replyError(ecNotFound, relReqFull)
 
   ## Handle a listing request: stream batched directory entries using
   ## ListChunk records and end with ListDone. Non-recursive.
@@ -387,66 +381,28 @@ proc handleClient*(sock: AsyncSocket, baseDir: string) {.async.} =
     # payload: varint path len | path bytes (relative in sandbox)
     let (relReqFull, nextIdx) = decodePathParam(payload)
     if nextIdx < 0:
-      await session.sendRecord(ErrorRec.uint8, @[toByte(ecBadPayload)]); return
+      await replyError(ecBadPayload, "decode path"); return
     if relReqFull.len == 0:
-      await session.sendRecord(ErrorRec.uint8, @[toByte(ecBadPath)]); return
+      await replyError(ecBadPath, "empty path"); return
     var absReq: string
     if sandboxed:
       if relReqFull.len > 0 and relReqFull[0] == '/':
-        errorSid(errors.encodeServer(ecAbsolute))
-        await session.sendRecord(ErrorRec.uint8, @[toByte(ecAbsolute)])
-        return
+        await replyError(ecAbsolute, relReqFull); return
       try:
         absReq = cleanJoin(exportDir, relReqFull)
       except CatchableError:
-        errorSid(errors.encodeServer(ecUnsafePath))
-        await session.sendRecord(ErrorRec.uint8, @[toByte(ecUnsafePath)])
-        return
+        await replyError(ecUnsafePath, relReqFull); return
     else:
       if relReqFull.len > 0 and relReqFull[0] == '/':
         absReq = normalizedPath(relReqFull)
       else:
         absReq = normalizedPath(exportDir / relReqFull)
     if fileExists(absReq):
-      let relativePath = if absReq.isRelativeTo(exportDir): absReq.relativePath(exportDir).replace(DirSep, '/') else: relReqFull
-      let size = getFileSize(absReq)
-      var buf = newSeq[byte]()
-      let item = protocol.encodeListItem(relativePath, int64(size), 0'u8)
-      buf.add(item)
-      await session.sendRecord(ListChunk.uint8, buf)
-      await session.sendRecord(ListDone.uint8, newSeq[byte]())
-      infoSid(fmt"list file: {relReqFull}")
+      await listSingleFile(absReq, relReqFull)
     elif dirExists(absReq):
-      infoSid(fmt"list dir: {relReqFull}")
-      var chunk = newSeq[byte]()
-      var count = 0
-      for it in walkDir(absReq):
-        let p = it.path
-        let isDir = (it.kind == pcDir)
-        if isDir:
-          let relativePath = p.relativePath(absReq).replace(DirSep, '/')
-          let item = protocol.encodeListItem(relativePath, 0'i64, 1'u8)
-          if chunk.len + item.len > 64*1024:
-            await session.sendRecord(ListChunk.uint8, chunk)
-            chunk.setLen(0)
-          chunk.add(item)
-          inc count
-        else:
-          let relativePath = p.relativePath(absReq).replace(DirSep, '/')
-          let size = getFileSize(p)
-          let item = protocol.encodeListItem(relativePath, int64(size), 0'u8)
-          if chunk.len + item.len > 64*1024:
-            await session.sendRecord(ListChunk.uint8, chunk)
-            chunk.setLen(0)
-          chunk.add(item)
-          inc count
-      if chunk.len > 0:
-        await session.sendRecord(ListChunk.uint8, chunk)
-      await session.sendRecord(ListDone.uint8, newSeq[byte]())
-      infoSid(fmt"list complete: {relReqFull} ({count} entries)")
+      await listDirectory(absReq, relReqFull)
     else:
-      errorSid(errors.encodeServer(ecNotFound))
-      await session.sendRecord(ErrorRec.uint8, @[toByte(ecNotFound)])
+      await replyError(ecNotFound, relReqFull)
   try:
     # Phase: record dispatch loop
     while true:
@@ -456,7 +412,7 @@ proc handleClient*(sock: AsyncSocket, baseDir: string) {.async.} =
       # and false if it timed out. Treat false as a timeout condition.
       if not await withTimeout(fut, session.ioTimeoutMs):
         await session.sendRecord(ErrorRec.uint8, @[toByte(ecTimeout)])
-        infoSid("session timeout; closing connection")
+        errorSid(fmt"{errors.encodeServer(ecTimeout)}: session timeout; closing connection")
         break
       let (t, payload) = await fut
       if payload.len == 0 and t == 0'u8:
@@ -481,16 +437,16 @@ proc handleClient*(sock: AsyncSocket, baseDir: string) {.async.} =
       else:
         discard
   except CatchableError as e:
-    errorSid(fmt"session error: {e.msg}")
+    errorSid(errors.renderClient(e))
   except OSError as e:
-    errorSid(fmt"session I/O error: {e.msg}")
+    errorSid(fmt"{errors.encodeServer(ecReadFail)}: {e.msg}")
   finally:
     # Phase: cleanup
     if currentFile != nil:
       currentFile.close()
       discard tryRemoveFile(partialPath) # cleanup partial on abrupt end
     sock.close()
-    infoSid("client disconnected")
+    infoSid(errors.encodeOk(errors.scDisconnected, "client disconnected"))
 
 proc serve*(listen: string, port: int, baseDir: string) {.async.} =
   ## Accept loop: binds and accepts clients, spawning handleClient for each.
