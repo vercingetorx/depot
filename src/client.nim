@@ -26,7 +26,7 @@ proc resetFailures*() {.inline.} =
   failureLines.setLen(0)
 
 proc addFailure*(op, path: string, code: errors.ErrorCode) {.inline.} =
-  failureLines.add(fmt"{op} {path} [{errors.codeName(code)}]")
+  failureLines.add(fmt"{op} {path} [{errors.errorName(code)}]")
 
 proc failuresCount*(): int {.inline.} = failureLines.len
 
@@ -63,7 +63,10 @@ proc parseRemote*(s: string): (string, int, string) =
 
 proc openSession*(remote: string, port: int): Future[Session] {.async.} =
   ## Establish a TCP connection to 'remote:port' and complete the secure
-  ## Depot handshake. Returns a Session ready for record I/O.
+  ## Depot handshake.
+  ##
+  ## On success returns a Session with negotiated keys, features and timeouts
+  ## ready for record I/O; on failure throws a coded error.
   # Phase: connect TCP
   let s = newAsyncSocket()
   try:
@@ -87,6 +90,8 @@ proc openSession*(remote: string, port: int): Future[Session] {.async.} =
 ## Sends mtime + permissions in UploadOpen, streams FileData, sends FileClose
 ## with checksum, and awaits UploadDone. Progress is cleared on success.
 proc sendFile*(sess: Session, localPath: string, remotePath: string) {.async.} =
+  ## Upload a single local file to a remote destination path.
+  ## Includes metadata, streams data with progress, and verifies server commit.
   # Phase A: open upload with destination
   proc openUpload(destRel: string, srcPath: string) {.async.} =
     ## Send UploadOpen (path + metadata) and await UploadOk/UploadFail.
@@ -110,7 +115,7 @@ proc sendFile*(sess: Session, localPath: string, remotePath: string) {.async.} =
   # Hasher for the current upload; used to compute checksum for FileClose
   var uploadHasher = newBlake2bCtx(digestSize=32)
   proc streamFile(path: string) {.async.} =
-    ## Stream the local file contents as FileData records.
+    ## Stream the local file contents as FileData records with progress.
     var fileIn: File
     try:
       fileIn = open(path, fmRead)
@@ -165,6 +170,7 @@ proc sendFile*(sess: Session, localPath: string, remotePath: string) {.async.} =
 ## then atomically moves into place. Raises coded errors on conflicts or I/O.
 proc recvFile*(sess: Session, remotePath: string, localPath: string) {.async.} =
   proc requestFile(relativePath: string) {.async.} =
+    ## Send DownloadOpen for a single file request under the server's export root.
     let req = encodePathParam(relativePath)
     await sess.sendRecord(DownloadOpen.uint8, req)
 
@@ -178,6 +184,7 @@ proc recvFile*(sess: Session, remotePath: string, localPath: string) {.async.} =
   let requestPath = remotePath
 
   proc cleanupPartial() =
+    ## Remove partial file and close handle if present.
     if outFile != nil:
       outFile.close()
     discard tryRemoveFile(common.partPath(localPath))
@@ -186,6 +193,7 @@ proc recvFile*(sess: Session, remotePath: string, localPath: string) {.async.} =
   var recvPerms: set[FilePermission]
 
   proc onPathOpen(payload: seq[byte]) {.async.} =
+    ## Handle PathOpen announcement for a single-file download.
     let (_, size, mtimeU, perms) = parsePathOpen(payload)
     totalBytes = size
     recvMtime = mtimeU
@@ -203,6 +211,7 @@ proc recvFile*(sess: Session, remotePath: string, localPath: string) {.async.} =
         await sess.sendRecord(PathAccept.uint8, newSeq[byte]())
 
   proc onFileData(payload: seq[byte]) =
+    ## Append data to the current partial file and update checksum.
     if outFile != nil:
       downloadHasher.update(payload)
       try:
@@ -216,6 +225,7 @@ proc recvFile*(sess: Session, remotePath: string, localPath: string) {.async.} =
       printProgress2("[downloading]", extractFilename(localPath), receivedBytes, totalBytes, startMs)
 
   proc onFileClose(payload: seq[byte]) {.async.} =
+    ## Verify checksum, move .part atomically, and apply metadata.
     if outFile != nil:
       outFile.close()
       if payload.len != 32:
@@ -249,9 +259,9 @@ proc recvFile*(sess: Session, remotePath: string, localPath: string) {.async.} =
       clearProgress()
 
   proc onServerError(payload: seq[byte]) =
+    ## Handle server-side error for single-file receive; cleans up partial.
     cleanupPartial()
     var ec = ecUnknown
-    echo "here"
     if payload.len == 1: ec = fromByte(payload[0])
     raise errors.newCodedError(ec, requestPath)
 
@@ -273,6 +283,8 @@ proc recvFile*(sess: Session, remotePath: string, localPath: string) {.async.} =
       break
     of uint8(ErrorRec): onServerError(payload)
     of uint8(RekeyReq):
+      # Rekey request carries the new epoch (4 bytes). Derive pending key
+      # material keyed by the trafficSecret and ack before activating.
       if payload.len == 4:
         let eb = payload
         let (out1, out2) = handshake.deriveRekey(sess.trafficSecret, eb)
@@ -282,7 +294,7 @@ proc recvFile*(sess: Session, remotePath: string, localPath: string) {.async.} =
         for i in 0 ..< 16: sess.pendingPRx[i] = out2[32 + i]
         sess.pendingEpoch = uint32(eb[0]) or (uint32(eb[1]) shl 8) or (uint32(eb[2]) shl 16) or (uint32(eb[3]) shl 24)
         await sess.sendRecord(RekeyAck.uint8, payload)
-        # activate
+        # Activate negotiated keys and reset sequence counters
         sess.epoch = sess.pendingEpoch
         for i in 0 ..< 32: sess.kTx[i] = sess.pendingKTx[i]
         for i in 0 ..< 32: sess.kRx[i] = sess.pendingKRx[i]
@@ -299,6 +311,10 @@ proc recvFile*(sess: Session, remotePath: string, localPath: string) {.async.} =
 ## Includes the top-level directory name under remoteDir, prints per-file [done]
 ## or [skip] lines, and a summary. Aborts the batch on session/local fatal.
 proc sendTree*(sess: Session, localRoot: string, remoteDir: string, skipExisting: bool = false) {.async.} =
+  ## Recursively upload a directory tree.
+  ##
+  ## The top-level directory name is included in the remote path, and each
+  ## file is sent via sendFile with progress and error aggregation.
   # Phase: base path resolution
   var base = common.toWirePath(remoteDir)
   if sess.srvSandboxed:
@@ -309,7 +325,7 @@ proc sendTree*(sess: Session, localRoot: string, remoteDir: string, skipExisting
   if base.len == 0: base = "."
   if not base.endsWith("/"): base &= "/"
 
-  # Pre-scan: compute totals
+  # Pre-scan: compute total file count and bytes for summary/progress
   var totalFiles = 0
   var totalBytes: int64 = 0
   if dirExists(localRoot):
@@ -328,6 +344,7 @@ proc sendTree*(sess: Session, localRoot: string, remoteDir: string, skipExisting
 
   # Phase: helpers for each upload unit
   proc uploadSingleFile(path: string) {.async.} =
+    ## Upload a single file (non-directory) under the computed base.
     try:
       # Single file goes under base using its filename
       let remoteRel = base & extractFilename(path)
@@ -350,6 +367,7 @@ proc sendTree*(sess: Session, localRoot: string, remoteDir: string, skipExisting
         inc failed
 
   proc uploadDirTree(rootPath: string) {.async.} =
+    ## Walk directory tree and upload each regular file under base/topName.
     let root = absolutePath(rootPath)
     let topName = extractFilename(root)
     for p in walkDirRec(rootPath):
@@ -393,6 +411,10 @@ proc sendTree*(sess: Session, localRoot: string, remoteDir: string, skipExisting
 ## Includes the top-level directory name locally, handles PathAccept/Skip,
 ## writes <path>.part and verifies checksum before moving into place.
 proc recvTree*(sess: Session, remotePath: string, localDest: string, skipExisting: bool = false) {.async.} =
+  ## Download a remote file or directory tree into localDest.
+  ##
+  ## Uses PathAccept/Skip per-file when dlAck is enabled. Writes to .part files
+  ## and verifies checksums before moving into place. Applies metadata.
   # Phase: send request
   let rp = common.toWirePath(remotePath)
   if sess.srvSandboxed:
@@ -412,7 +434,11 @@ proc recvTree*(sess: Session, remotePath: string, localDest: string, skipExistin
   var totalBytes: int64 = -1
   var receivedBytes: int64 = 0
   var startMs = nowMs()
-  var fileCount = 0
+  # Tallying for summary, mirroring sendTree
+  var totalFiles = 0             # all files announced by server
+  var succeeded = 0              # files successfully received
+  var skipped = 0                # files skipped due to local existence
+  var failed = 0                 # files that resulted in a local conflict/error but transfer continued
   var totalBytesAll: int64 = 0
   var receivedBytesAll: int64 = 0
   var skipCurrent = false
@@ -427,7 +453,6 @@ proc recvTree*(sess: Session, remotePath: string, localDest: string, skipExistin
     ## Begin writing a new target file under localDest, creating parents.
     ## The remote path is a forward-slash separated relative path.
     totalBytes = fileSize
-    inc fileCount
     totalBytesAll += fileSize
     if dirExists(localDest):
       let full = normalizedPath(localDest / relativePath)
@@ -441,6 +466,7 @@ proc recvTree*(sess: Session, remotePath: string, localDest: string, skipExistin
         raise errors.newCodedError(ecConflict, "")
     if skipExisting and fileExists(targetPath):
       echo errors.encodeSkip(fmt"existing {targetPath} ({formatBytes(totalBytes)})")
+      inc skipped
       skipCurrent = true
     else:
       partFile = open(common.partPath(targetPath), fmWrite)
@@ -509,6 +535,7 @@ proc recvTree*(sess: Session, remotePath: string, localDest: string, skipExistin
       except CatchableError:
         discard
       clearProgress()
+      inc succeeded
       echo errors.encodeOk(errors.scDone, fmt"{targetPath} ({formatBytes(totalBytes)})")
       fileOpen = false
 
@@ -532,6 +559,7 @@ proc recvTree*(sess: Session, remotePath: string, localDest: string, skipExistin
     case t
     of uint8(PathOpen):
       let (relativePath, fileSize, mtimeU, perms) = parsePathOpen(payload)
+      inc totalFiles
       let fullPath = (if dirExists(localDest): normalizedPath(localDest / relativePath) else: localDest)
       let existsLocally = fileExists(fullPath)
       if existsLocally:
@@ -539,8 +567,10 @@ proc recvTree*(sess: Session, remotePath: string, localDest: string, skipExistin
         skipCurrent = true
         if skipExisting:
           echo errors.encodeSkip(fmt"existing {fullPath} ({formatBytes(fileSize)})")
+          inc skipped
         else:
           pendingErr = fmt"{errors.encodeClient(ecExists)}: {fullPath}"
+          inc failed
         continue
       else:
         await sess.sendRecord(PathAccept.uint8, newSeq[byte]())
@@ -553,13 +583,16 @@ proc recvTree*(sess: Session, remotePath: string, localDest: string, skipExistin
       if pendingErr.len > 0:
         # Surface the local error after telling server to skip
         raise errors.newCodedError(ecExists, pendingErr)
-      echo errors.encodeOk(errors.scTransferred, fmt"{fileCount} file(s), {formatBytes(receivedBytesAll)}")
+      let skippedSuffix = if skipped > 0: fmt", skipped {skipped}" else: ""
+      echo errors.encodeOk(errors.scTransferred, fmt"{succeeded}/{totalFiles} file(s), {formatBytes(receivedBytesAll)}{skippedSuffix}")
       break
     of uint8(ErrorRec): onServerError(payload)
     else: discard
 
 ## List files or a single file at remotePath. Emits a simple text listing.
 proc list*(sess: Session, remotePath: string) {.async.} =
+  ## List directory entries or a single file on the server without downloading.
+  ## Prints a minimal text format for CLI output.
   let rp = common.toWirePath(remotePath)
   if sess.srvSandboxed:
     if rp.len > 0 and rp[0] == '/':
@@ -593,6 +626,8 @@ proc list*(sess: Session, remotePath: string) {.async.} =
 ## Send multiple local sources into a remote directory.
 ## Files go to remoteDir/basename; directories are sent with top-level included.
 proc sendMany*(sess: Session, sources: seq[string], remoteDir: string, skipExisting: bool = false) {.async.} =
+  ## Upload multiple sources. Directories are sent with top-level included; files
+  ## are uploaded to remoteDir/basename. Aggregates per-item errors.
   var base = common.toWirePath(remoteDir)
   if sess.srvSandboxed:
     if base.len > 0 and base[0] == '/':
@@ -627,6 +662,7 @@ proc sendMany*(sess: Session, sources: seq[string], remoteDir: string, skipExist
 ## Receive multiple remote items into a local destination.
 ## Each remote path is handled by recvTree and may be a file or a directory.
 proc recvMany*(sess: Session, remotePaths: seq[string], localDest: string, skipExisting: bool = false) {.async.} =
+  ## Download multiple remote paths into localDest. Each item may be a file or dir.
   for rp in remotePaths:
     try:
       await recvTree(sess, rp, localDest, skipExisting)
