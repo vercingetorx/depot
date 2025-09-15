@@ -8,7 +8,7 @@ var prLastPct*: int = -1
 let prIsTty* = isatty(stdout)
 
 proc nowMs*(): int64 =
-  ## Monotonic milliseconds suitable for intervals/timeouts.
+  ## Milliseconds (coarse) for progress timing; uses common.monoMs().
   common.monoMs()
 
 proc fmt2(f: float): string =
@@ -40,8 +40,9 @@ proc envCols(): int =
 
 proc clearProgress*() =
   ## Clear the current progress line from the terminal (if a TTY).
-  ## Erases all wrapped rows to avoid cascades on subsequent draws.
-  ## Resets internal throttle state so the next update prints immediately.
+  ##
+  ## Erases all wrapped rows to avoid cascades on subsequent draws and resets
+  ## internal throttle state so the next update prints immediately.
   if prIsTty and prLastLen > 0:
     # Compute how many rows the previous line occupied
     let cols = envCols()
