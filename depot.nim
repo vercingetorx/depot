@@ -1,6 +1,6 @@
 ## CLI entrypoint: subcommand parsing and dispatch to server/client.
-import std/[os, strutils, parseopt, logging, asyncdispatch, strformat]
-import src/[client, handshake, server, userconfig]
+import std/[os, strutils, parseopt, logging, asyncdispatch, strformat, times]
+import src/[client, handshake, server, userconfig, errors]
 
 const version* = "0.1.0"
 # const commit* {.strdefine.}: string = "unknown"
@@ -219,9 +219,9 @@ proc runExport(argsIn: var seq[string], hereFlag, allFlag: bool,
         args = resolved
     # Phase 2: open session and upload
     var sess = waitFor client.openSession(host, remotePort)
-    waitFor client.uploadPaths(sess, args, remoteDest, skipExisting)
+    waitFor client.sendMany(sess, args, remoteDest, skipExisting)
   except CatchableError as e:
-    stderr.writeLine(e.msg)
+    stderr.writeLine(errors.renderClient(e))
     quit(1)
   except OSError as e:
     stderr.writeLine(e.msg)
@@ -242,14 +242,16 @@ proc runImport(args: seq[string], hereFlag, allFlag: bool,
     if hereFlag:
       localDest = getCurrentDir()
     if localDest.len > 0:
-      discard existsOrCreateDir(localDest)
+      createDir(localDest)
     # Phase 2: open session and download
     var sess = waitFor client.openSession(host, remotePort)
+    var rps: seq[string]
     for item in items:
-      let remotePath = if remoteSource.len > 0: (remoteSource / item).replace("\\", "/") else: item
-      waitFor client.downloadTo(sess, remotePath, localDest, skipExisting)
+      let rp = if remoteSource.len > 0: (remoteSource / item).replace("\\", "/") else: item
+      rps.add(rp)
+    waitFor client.recvMany(sess, rps, localDest, skipExisting)
   except CatchableError as e:
-    stderr.writeLine(e.msg)
+    stderr.writeLine(errors.renderClient(e))
     quit(1)
   except OSError as e:
     stderr.writeLine(e.msg)
@@ -261,9 +263,9 @@ proc runLs(remotePath: string,
   ## Handle `depot ls` subcommand. Lists files remotely without copying.
   try:
     var sess = waitFor client.openSession(host, remotePort)
-    waitFor client.listRemote(sess, remotePath)
+    waitFor client.list(sess, remotePath)
   except CatchableError as e:
-    stderr.writeLine(e.msg)
+    stderr.writeLine(errors.renderClient(e))
     quit(1)
   except OSError as e:
     stderr.writeLine(e.msg)
@@ -296,13 +298,14 @@ proc main() =
   var keyPassFilePath = ""
   var unknownFlags: seq[string]
   var expectValueFor = ""
+  var failures = false
   # Option helpers to DRY up parsing/apply logic
   proc needsValue(opt: string): bool =
     ## Return true if this option expects a value
     case opt
     of "listen", "port", "base", "log", "host",
        "remote-dir", "dest", "local-dir", "rport",
-       "key-pass", "key-pass-file": true
+       "key-pass", "key-pass-file", "failures": true
     else: false
 
   proc applyOpt(opt: string, val: string) =
@@ -329,6 +332,7 @@ proc main() =
     of "allow-overwrite": allowOverwrite = true
     of "key-pass": keyPass = val
     of "key-pass-file": keyPassFilePath = val
+    of "failures": failures = true
     of "here": hereFlag = true
     of "help", "h": helpFlag = true
     of "skip-existing", "skip": skipExisting = true
@@ -396,9 +400,25 @@ proc main() =
     handshake.serverKeyPassphrase = keyPass
     runServe(listen, port, base, unsafeFs)
   of "export":
+    client.resetFailures()
     runExport(args, hereFlag, allFlag, remoteDest, skipExisting, defaults, host, remotePort)
+    if failures:
+      let n = client.failuresCount()
+      if n > 0:
+        let ts = now()
+        let outFile = defaults.client.base / "depot" / fmt"failures-{ts.year:04}{ts.month:02}{ts.monthday:02}-{ts.hour:02}{ts.minute:02}{ts.second:02}.txt"
+        client.writeFailures(outFile)
+        echo fmt"Failures: {n} (see {outFile})"
   of "import":
+    client.resetFailures()
     runImport(args, hereFlag, allFlag, remoteSource, localDest, host, remotePort, skipExisting)
+    if failures:
+      let n = client.failuresCount()
+      if n > 0:
+        let ts = now()
+        let outFile = defaults.client.base / "depot" / fmt"failures-{ts.year:04}{ts.month:02}{ts.monthday:02}-{ts.hour:02}{ts.minute:02}{ts.second:02}.txt"
+        client.writeFailures(outFile)
+        echo fmt"Failures: {n} (see {outFile})"
   of "ls":
     runLs(remoteList, defaults, host, remotePort)
   else:
@@ -408,7 +428,7 @@ when isMainModule:
   try:
     main()
   except CatchableError as e:
-    stderr.writeLine(e.msg)
+    stderr.writeLine(errors.renderClient(e))
     quit(1)
   except OSError as e:
     stderr.writeLine(e.msg)
