@@ -20,7 +20,14 @@
 
 - client.nim
   - Client-side session setup and transfers.
-  - Uploads: `uploadFile`, `uploadPaths`; Downloads: `downloadFile`, `downloadTo`.
+  - Public API (symmetric, source→dest):
+    - `sendFile(sess, localPath, remotePath)`
+    - `recvFile(sess, remotePath, localPath)`
+    - `sendTree(sess, localRoot, remoteDir, skipExisting=false)`
+    - `recvTree(sess, remotePath, localDest, skipExisting=false)`
+    - `sendMany(sess, sources, remoteDir, skipExisting=false)`
+    - `recvMany(sess, remotePaths, localDest, skipExisting=false)`
+    - `list(sess, remotePath)`
   - Progress UI is delegated to `progress.nim`.
   - Directory export includes the top‑level directory name (e.g., `dir1/...`).
   - Metadata preservation: restores `mtime` and `FilePermission` received in
@@ -45,11 +52,14 @@
 - progress.nim
   - TTY progress rendering (`printProgress2`), `clearProgress`, and `formatBytes`.
 
-- varint.nim, paths.nim, records.nim, common.nim, errors.nim
-  - Small, focused utilities for encoding, path safety, record constants,
-    byte/string conversions.
-- errors.nim defines `ErrorCode` (single source of truth) and the mappings
-  used by both client and server. Wire payloads contain only the code.
+ - varint.nim, paths.nim, records.nim, common.nim, errors.nim
+   - Small, focused utilities for encoding, path safety, record constants,
+     byte/string conversions.
+ - errors.nim
+   - Defines `ErrorCode` (single source of truth) and the mappings used by both client and server.
+   - Defines `SuccessCode` for consistent, typed success/skip logging.
+   - Defines typed exceptions `CodedError` and `HandshakeError` that carry an `ErrorCode`.
+   - Wire payloads contain only the error code (1 byte); success is never sent over wire.
 
 ---
 
@@ -65,7 +75,7 @@
 
 - Framing: varint(length) | type | ciphertext | tag(16).
 - PathOpen (server→client): varint(pathLen) | path | varint(size) | varint(mtimeUnix) | varint(count) | ordinals[count], where ordinals encode a portable `FilePermission` set.
-- PathAccept/PathSkip: client acknowledges or skips; PathSkip payload is a 1‑byte code.
+  - PathAccept/PathSkip: client acknowledges or skips; no payload is required or sent.
 - FileData: file bytes (chunked, typically 1 MiB).
 - FileClose: BLAKE2b‑256 of the full file; receiver verifies before commit.
 - ListOpen/ListChunk/ListDone: non‑recursive listings; each entry = varint(pathLen) | path | varint(size) | kind(0=file,1=dir).
@@ -78,6 +88,14 @@
   - Client: `[code] <clientMessage(code)>`
   - Server: `[code] <serverMessage(code)>`
 - Example code set: exists, filter, no‑space, perms, absolute, unsafe‑path, bad‑path, bad‑payload, open‑fail, read‑fail, not‑found, timeout, checksum, auth, compat, server‑config, unknown.
+
+### Error Policy (client)
+
+- Batch transfers use a severity policy to decide whether to continue or abort:
+  - Session‑fatal: `closed`, `timeout`, `protocol`, `compat`, `auth`, `server-config`, `connect` → abort entire run.
+  - Local‑fatal: `no-space`, `perms`, `open-fail`, `write-fail`, `read-fail` → abort entire run.
+  - Per‑item: `exists`, `not-found`, `bad-path`, `unsafe-path`, `absolute`, `checksum`, `filter` → log and continue to next item.
+- All transfer errors are raised as typed coded exceptions carrying `ErrorCode`.
 
 ## Transfer Semantics (details)
 
