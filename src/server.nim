@@ -12,10 +12,11 @@ import ../private/blake2/blake2b
 
 const bufSize = 1024 * 1024  # 1 MiB
 
-var sandboxed*: bool = true
-var allowOverwrite*: bool = false
+var sandboxed*: bool = true          # Constrain requests under depot/export & depot/import
+var allowOverwrite*: bool = false    # Allow overwriting existing files on upload
 
 proc newSessionId(): string =
+  ## Generate a short, log-friendly session identifier (hex-encoded 8 bytes).
   let b = urandom(8)
   for by in b:
     result.add(by.toHex(2))
@@ -56,6 +57,10 @@ proc handleClient*(sock: AsyncSocket, baseDir: string) {.async.} =
   infoSid(errors.encodeOk(errors.scHandshake, "handshake complete"))
   let (exportDir, importDir) = ensureBaseDirs(baseDir)
   # Phase: mutable transfer state (per-connection)
+  # currentFile: open handle for the active upload (.part file)
+  # currentPath/partialPath: absolute destination and staging path (.part)
+  # uploadHasher: rolling BLAKE2b used to verify integrity at commit
+  # pendingMtimeUnix/pendingPermissions: metadata applied after commit
   var currentFile: File
   var currentPath: string
   var partialPath: string
@@ -66,6 +71,8 @@ proc handleClient*(sock: AsyncSocket, baseDir: string) {.async.} =
   var pendingPermissions: set[FilePermission]
   
   # Phase: message handlers (small, focused)
+  # These helpers encapsulate specific protocol tasks; they capture 'session',
+  # 'exportDir', and 'importDir' from the outer scope.
   proc sendErrorCode(ec: ErrorCode) {.async.} =
     ## Send an application ErrorRec with a single error code byte.
     await session.sendRecord(ErrorRec.uint8, @[toByte(ec)])
@@ -80,6 +87,10 @@ proc handleClient*(sock: AsyncSocket, baseDir: string) {.async.} =
 
   # Focused helpers for non-recursive listing
   proc listSingleFile(absReq: string, relReqFull: string) {.async.} =
+    ## Emit a single file entry. Use a relative path under exportDir when sandboxed,
+    ## otherwise preserve the request path as provided by the client.
+    # When sandboxed, the client sees paths relative to exportDir so it can
+    # reconstruct the same tree under its destination.
     let relativePath = if absReq.isRelativeTo(exportDir): absReq.relativePath(exportDir).replace(DirSep, '/') else: relReqFull
     let size = getFileSize(absReq)
     var buf = newSeq[byte]()
@@ -90,24 +101,31 @@ proc handleClient*(sock: AsyncSocket, baseDir: string) {.async.} =
     infoSid(errors.encodeOk(errors.scListFile, fmt"{relReqFull}"))
 
   proc listDirectory(absReq: string, relReqFull: string) {.async.} =
+    ## Stream a non-recursive listing for 'absReq'. Entries are batched into
+    ## ~64 KiB ListChunk frames and closed with a ListDone record. Paths are
+    ## made relative to 'absReq' and use forward slashes for the wire format.
     infoSid(errors.encodeOk(errors.scListDir, fmt"{relReqFull}"))
     var chunk = newSeq[byte]()
     var count = 0
     for it in walkDir(absReq):
       let p = it.path
-      let isDir = (it.kind == pcDir)
-      if isDir:
-        let relativePath = p.relativePath(absReq).replace(DirSep, '/')
+      let relativePath = p.relativePath(absReq).replace(DirSep, '/')
+      if it.kind == pcDir:
+        # Directory items advertise kind=1 and size=0
         let item = protocol.encodeListItem(relativePath, 0'i64, 1'u8)
+        # Flush the current batch if adding this item would exceed ~64 KiB.
+        # This keeps ListChunk records reasonably sized for lower latency
+        # and avoids building very large frames on busy directories.
         if chunk.len + item.len > 64*1024:
           await session.sendRecord(ListChunk.uint8, chunk)
           chunk.setLen(0)
         chunk.add(item)
         inc count
       else:
-        let relativePath = p.relativePath(absReq).replace(DirSep, '/')
+        # Regular files advertise kind=0 with byte size
         let size = getFileSize(p)
         let item = protocol.encodeListItem(relativePath, int64(size), 0'u8)
+        # Same batching policy for files: cap ~64 KiB per ListChunk.
         if chunk.len + item.len > 64*1024:
           await session.sendRecord(ListChunk.uint8, chunk)
           chunk.setLen(0)
@@ -118,9 +136,12 @@ proc handleClient*(sock: AsyncSocket, baseDir: string) {.async.} =
     await session.sendRecord(ListDone.uint8, newSeq[byte]())
     infoSid(errors.encodeOk(errors.scListComplete, fmt"{relReqFull} ({count} entries)"))
 
-  ## Begin an upload session for a single file. Validates path against
-  ## sandbox rules, creates the parent directory, opens a .part file,
-  ## and replies UploadOk or UploadFail with a reason.
+  ## Begin an upload session for a single file.
+  ##
+  ## Validates the destination path (sandbox rules), prepares the parent
+  ## directory, opens a temporary .part file to stream into, and replies
+  ## with UploadOk or UploadFail. Any I/O failure is mapped to a precise
+  ## error code for the client.
   proc handleUploadOpen(payload: seq[byte]) {.async.} =
     # payload: encoded path + mtime + permissions
     let (relativeDestPath, srcMtimeUnix, srcPerms) = parseUploadOpen(payload)
@@ -129,11 +150,13 @@ proc handleClient*(sock: AsyncSocket, baseDir: string) {.async.} =
       return
     var destAbs: string
     if sandboxed:
+      # In sandbox, absolute destinations are forbidden.
       if relativeDestPath.len > 0 and relativeDestPath[0] == '/':
         errorSid(errors.encodeServer(ecAbsolute))
         await session.sendRecord(UploadFail.uint8, @[toByte(ecAbsolute)])
         return
       try:
+        # Constrain destination under depot/import, rejecting traversal.
         destAbs = cleanJoin(importDir, relativeDestPath)
       except CatchableError:
         errorSid(errors.encodeServer(ecUnsafePath))
@@ -150,12 +173,12 @@ proc handleClient*(sock: AsyncSocket, baseDir: string) {.async.} =
     uploadHasher = newBlake2bCtx(digestSize=32)
     pendingMtimeUnix = srcMtimeUnix
     pendingPermissions = srcPerms
-    # refuse early if destination already exists (unless server allows overwrite)
+    # Refuse early if destination exists (unless overwriting is enabled).
     if fileExists(currentPath) and not allowOverwrite:
       errorSid(errors.encodeServer(ecExists))
       await session.sendRecord(UploadFail.uint8, @[toByte(ecExists)])
       return
-    # ensure parent directories exist and aren't symlinks
+    # Ensure parent directories exist and aren't symlinks (avoid trickery).
     let parentDir = splitFile(currentPath).dir
     if parentDir.len > 0:
       createDir(parentDir)
@@ -166,7 +189,7 @@ proc handleClient*(sock: AsyncSocket, baseDir: string) {.async.} =
           await session.sendRecord(UploadFail.uint8, @[toByte(ecUnsafePath)])
           return
       except OSError:
-        # FIXME: no silent errors.
+        # If we cannot stat the parent, proceed and let file open fail explicitly.
         discard
     try:
       currentFile = open(partialPath, fmWrite)
@@ -177,13 +200,16 @@ proc handleClient*(sock: AsyncSocket, baseDir: string) {.async.} =
       return
     await session.sendRecord(UploadOk.uint8, newSeq[byte]())
 
-  ## Handle a file data chunk for the current upload. Appends to the
-  ## .part file and maps write failures to precise reasons.
+  ## Handle a file data chunk for the current upload.
+  ##
+  ## Appends to the .part file and updates a rolling BLAKE2b hash used for
+  ## integrity verification on commit. On write failure, the partial file is
+  ## removed and the error is sent to the client.
   proc handleUploadDataChunk(payload: seq[byte]) =
     if currentFile != nil:
       try:
         discard currentFile.writeBytes(payload, 0, payload.len)
-        uploadHasher.update(payload)
+        uploadHasher.update(payload)  # rolling hash for integrity verification
       except OSError as e:
         let ec = errors.osErrorToCode(e, ecWriteFail)
         errorSid(errors.encodeServer(ec))
@@ -192,8 +218,12 @@ proc handleClient*(sock: AsyncSocket, baseDir: string) {.async.} =
         discard tryRemoveFile(partialPath)
         asyncCheck session.sendRecord(ErrorRec.uint8, @[toByte(ec)])
 
-  ## Finalize the current upload: close the .part, atomically move into
-  ## place (if not overwriting), and reply UploadDone or ErrorRec.
+  ## Finalize the current upload.
+  ##
+  ## Closes the .part file, verifies the checksum provided by the client,
+  ## optionally removes an existing file (if overwriting is enabled), then
+  ## atomically moves the .part into place and applies mtime/permissions.
+  ## Replies UploadDone or an ErrorRec.
   proc handleUploadCommit(payload: seq[byte]) {.async.} =
     if currentFile != nil:
       currentFile.close()
@@ -251,9 +281,12 @@ proc handleClient*(sock: AsyncSocket, baseDir: string) {.async.} =
       pendingMtimeUnix = 0
       pendingPermissions = {}
 
-  ## Handle a client download request: for a file, send PathOpen + stream
-  ## after client PathAccept; for a directory, iterate children and stream
-  ## each accepted file. Ends with DownloadDone.
+  ## Handle a client download request.
+  ##
+  ## If the target is a file: send PathOpen, await PathAccept (if required),
+  ## stream FileData chunks, then FileClose with checksum. If the target is a
+  ## directory: iterate files recursively and perform the same for each entry.
+  ## Always end the transfer with DownloadDone.
   proc handleDownloadRequest(payload: seq[byte]) {.async.} =
     # payload: varint path len | path bytes
     let (relReqFull, nextIdx) = decodePathParam(payload)
@@ -263,6 +296,7 @@ proc handleClient*(sock: AsyncSocket, baseDir: string) {.async.} =
       await replyError(ecBadPath, "empty path"); return
     var absReq: string
     if sandboxed:
+      # In sandbox, require a relative request under exportDir.
       if relReqFull.len > 0 and relReqFull[0] == '/':
         await replyError(ecAbsolute, relReqFull); return
       try:
@@ -277,6 +311,8 @@ proc handleClient*(sock: AsyncSocket, baseDir: string) {.async.} =
     
     # Focused helpers for sending data to the client
     proc proposeRekeyIfNeeded() {.async.} =
+      ## Opportunistically propose a rekey based on elapsed time since last rekey.
+      ## A new epoch and pending keys are derived and announced via RekeyReq.
       if (common.monoMs() - session.lastRekeyMs) > session.rekeyIntervalMs and session.pendingEpoch == 0'u32:
         var epochBytes: array[4, byte]
         let newEpoch = session.epoch + 1'u32
@@ -285,6 +321,7 @@ proc handleClient*(sock: AsyncSocket, baseDir: string) {.async.} =
         epochBytes[2] = byte((newEpoch shr 16) and 0xff)
         epochBytes[3] = byte((newEpoch shr 24) and 0xff)
         let (out1, out2) = handshake.deriveRekey(session.trafficSecret, epochBytes)
+        # Stash pending keys to be activated after the client acknowledges (RekeyAck)
         for i in 0 ..< 32: session.pendingKRx[i] = out1[i]
         for i in 0 ..< 16: session.pendingPRx[i] = out1[32 + i]
         for i in 0 ..< 32: session.pendingKTx[i] = out2[i]
@@ -294,14 +331,19 @@ proc handleClient*(sock: AsyncSocket, baseDir: string) {.async.} =
         await session.sendRecord(RekeyReq.uint8, epochBytes)
 
     proc absFromRel(baseAbs: string, relativePath: string): string =
-      ## Resolve a filesystem path for a file under the requested base directory.
-      ## baseAbs is the directory resolved from the request (under exportDir in sandbox).
+      ## Resolve a filesystem path from a base and a relative path.
+      ## - If baseAbs is a file, join relative to its parent directory.
+      ## - If relativePath is absolute, normalize and return it unchanged.
+      # Example: if baseAbs = /root/dir/file.txt and relativePath = "sub/a.bin",
+      # join under /root/dir so that file requests don't duplicate the filename.
       if relativePath.len > 0 and relativePath[0] == '/':
         return normalizedPath(relativePath)
-      normalizedPath(baseAbs / relativePath)
+      let baseRoot = if fileExists(baseAbs): splitFile(baseAbs).dir else: baseAbs
+      normalizedPath(baseRoot / relativePath)
 
     proc awaitAck(relativePath: string): Future[bool] {.async.} =
-      ## Await client ack if negotiated. Logs [skip] with context and returns false on skip.
+      ## Await client ack (PathAccept/PathSkip) if negotiated.
+      ## Logs [skip] with context and returns false on skip.
       if session.dlAck:
         let (atk, _) = await session.recvRecord()
         if atk == PathAccept.uint8: return true
@@ -313,9 +355,14 @@ proc handleClient*(sock: AsyncSocket, baseDir: string) {.async.} =
       return true
 
     proc sendFileToClient(fsRel: string, wireRel: string) {.async.} =
-      ## Stream one file to the client: announce via PathOpen(wireRel),
-      ## await ack, send FileData, then FileClose with checksum.
+      ## Stream one file to the client.
+      ##
+      ## Announces via PathOpen(wireRel), awaits ack (if negotiated), sends
+      ## FileData chunks, then FileClose with checksum. Rejects symlinks or
+      ## special files via isSafeFile.
       await proposeRekeyIfNeeded()
+      # absReq may be a file (single-file request) or a directory (tree request).
+      # absFromRel handles both cases safely.
       let absPath = absFromRel(absReq, fsRel)
       if not isSafeFile(absPath):
         await replyError(ecUnsafePath, absPath)
@@ -324,6 +371,7 @@ proc handleClient*(sock: AsyncSocket, baseDir: string) {.async.} =
       let mtimeUnix: int64 = int64(getLastModificationTime(absPath).toUnix())
       let permissionSet = getFilePermissions(absPath)
       let payload = protocol.encodePathOpen(wireRel, int64(fileSize), mtimeUnix, permissionSet)
+      # PathOpen payload includes: relative path, file size, mtime (unix), and permissions
       await session.sendRecord(PathOpen.uint8, payload)
       if not await awaitAck(wireRel): return
       infoSid(errors.encodeOk(errors.scSendStart, fmt"{wireRel} ({fileSize} bytes)"))
@@ -345,8 +393,11 @@ proc handleClient*(sock: AsyncSocket, baseDir: string) {.async.} =
         await replyError(ec, e.msg)
 
     proc sendTreeToClient(baseAbs: string) {.async.} =
+      ## Walk a directory tree and send each regular file.
+      ## The top-level directory name is prefixed on the wire path so the
+      ## client reconstructs the same shape under its destination.
       var count = 0
-      let baseName = extractFilename(baseAbs)
+      let baseName = extractFilename(baseAbs)  # top-level directory name for client presentation
       for p in walkDirRec(baseAbs):
         if dirExists(p): continue
         let fsRel = p.relativePath(baseAbs)
@@ -368,8 +419,10 @@ proc handleClient*(sock: AsyncSocket, baseDir: string) {.async.} =
     else:
       await replyError(ecNotFound, relReqFull)
 
-  ## Handle a listing request: stream batched directory entries using
-  ## ListChunk records and end with ListDone. Non-recursive.
+  ## Handle a listing request.
+  ##
+  ## Streams batched directory entries using ListChunk records and ends with
+  ## ListDone. Listing is non-recursive and respects sandbox path checks.
   proc handleListRequest(payload: seq[byte]) {.async.} =
     # payload: varint path len | path bytes (relative in sandbox)
     let (relReqFull, nextIdx) = decodePathParam(payload)
@@ -412,16 +465,22 @@ proc handleClient*(sock: AsyncSocket, baseDir: string) {.async.} =
         break
       case t
       of uint8(UploadOpen):
+        # Client is initiating an upload: path+metadata in payload
         await handleUploadOpen(payload)
       of uint8(FileData):
+        # Upload data chunk for the current file
         handleUploadDataChunk(payload)
       of uint8(FileClose):
+        # End of upload for the current file (includes checksum)
         await handleUploadCommit(payload)
       of uint8(DownloadOpen):
+        # Client requests a download of a file or directory
         await handleDownloadRequest(payload)
       of uint8(ListOpen):
+        # Client requests a non-recursive listing
         await handleListRequest(payload)
       of uint8(ErrorRec):
+        # Client surfaced an error; log code if present
         if payload.len == 1:
           let ec = fromByte(payload[0])
           errorSid(errors.encodeServer(ec))
