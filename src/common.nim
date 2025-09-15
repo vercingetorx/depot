@@ -13,7 +13,7 @@ proc fromBytes*(bs: openArray[byte]): string {.inline.} =
     result[i] = char(b)
 
 proc toStr*(data: openArray[byte]): string {.inline.} =
-  ## Convert byte-like data to a Nim string without reinterpretation.
+  ## Copy byte-like data into a Nim string, preserving raw bytes.
   result = newString(data.len)
   for i, b in data:
     result[i] = char(b)
@@ -25,8 +25,8 @@ proc bytesCopy*(data: openArray[byte]): seq[byte] {.inline.} =
     copyMem(addr result[0], unsafeAddr data[0], data.len)
 
 proc monoMs*(): int64 {.inline.} =
-  ## Milliseconds since Unix epoch. Suitable for coarse intervals/timeouts.
-  ## Note: Uses wall clock; consider monotonic if you switch Session fields.
+  ## Milliseconds since Unix epoch.
+  ## Used for coarse intervals/timeouts; not strictly monotonic.
   int64(epochTime() * 1000)
 
 proc partPath*(p: string): string {.inline.} =
