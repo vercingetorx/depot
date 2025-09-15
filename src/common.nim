@@ -1,6 +1,6 @@
 # Common helpers shared by client/server for simple byte/string conversions
 # and small cross-cutting utilities.
-import std/[times, strformat]
+import std/[times, strformat, os, strutils]
 
 proc toBytes*(s: string): seq[byte] {.inline.} =
   result = newSeq[byte](s.len)
@@ -32,3 +32,12 @@ proc monoMs*(): int64 {.inline.} =
 proc partPath*(p: string): string {.inline.} =
   ## Conventional on-disk name for partial/in-progress file operations.
   fmt"{p}.part"
+
+proc toWirePath*(p: string): string {.inline.} =
+  ## Normalize a path for protocol use with forward slashes and no '.'/'..'.
+  ## Use only for wire paths; filesystem operations should use std/os paths.
+  let s = normalizedPath(p)
+  when DirSep == '/':
+    s
+  else:
+    s.replace(DirSep, '/')
