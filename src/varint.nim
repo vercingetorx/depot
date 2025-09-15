@@ -13,6 +13,7 @@ proc putUvar*(x: uint64): seq[byte] =
 
 proc getUvar*(data: openArray[byte], start: int = 0): tuple[value: uint64, next: int] =
   ## Decode unsigned varint and return (value, nextIndex).
+  ## Accepts up to 10 bytes for uint64; raises VarintError on truncation.
   var shift: uint64
   var idx = start
   var val: uint64
