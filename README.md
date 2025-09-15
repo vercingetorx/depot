@@ -1,4 +1,4 @@
-WIP
+# WIP
 
 # Depot — Secure File Transfer (Kyber + XChaCha20)
 
@@ -112,11 +112,13 @@ log  = info
 base = /home/user/Downloads
 ```
 
-## Errors and Logging (brief)
+## Messages and Codes
 
 - Wire carries only an error code (1 byte); both sides render standardized messages:
   - Client: `[code] <clientMessage(code)>`
   - Server: `[code] <serverMessage(code)>`
+- Success and skip messages are local only (not sent on wire) and use typed success codes:
+  - Examples: `[connected] ...`, `[handshake] ...`, `[send-start] ...`, `[send-complete] ...`, `[download-request] ...`, `[download-complete] ...`, `[list-*] ...`, `[skip] ...`, `[done] ...`, `[transferred] ...`.
 - Progress: single‑line live update and a growing history of completed files.
 
 See CORE.md for the canonical code list and mappings.
@@ -127,10 +129,11 @@ See CORE.md for the canonical code list and mappings.
 - Nonces use a per-direction 16-byte prefix and a 64-bit counter; keys are derived with Argon2id bound to the handshake transcript.
 - The server does not invoke a shell to parse paths; the protocol is structured and binary.
 
-## Protocol Summary (brief)
+## Protocol Summary
 
 - Record framing over TCP with AEAD; directory listings and file streaming records.
 - Upload/Download completion is signaled with a checksum and commit.
+- Ack for downloads uses `PathAccept` / `PathSkip` records without payloads; the record type is the signal.
 
 For exact wire formats and record layouts, see CORE.md.
 
