@@ -53,6 +53,11 @@ const argon2TCost = 2
 
 type
   HandshakeError* = object of CatchableError
+    code*: errors.ErrorCode
+
+proc newHandshakeError*(code: errors.ErrorCode, message: string): ref HandshakeError =
+  result = newException(HandshakeError, message)
+  result.code = code
 
 proc configDir*(): string =
   ## Return the base configuration directory for Depot
@@ -292,10 +297,10 @@ proc clientHandshake*(sock: AsyncSocket, remoteId: string): Future[Session] {.as
   let (tServerHello, serverHelloBlob) = await recvBlob(sock)
   if tServerHello == 0x06'u8:
     let ec = if serverHelloBlob.len == 1: fromByte(serverHelloBlob[0]) else: ecUnknown
-    raise newException(HandshakeError, encodeClient(ec))
-  if tServerHello != 0x04'u8: raise newException(HandshakeError, encodeReason(reasonBadPayload, "expected SERVER_HELLO"))
+    raise newHandshakeError(ec, "")
+  if tServerHello != 0x04'u8: raise newHandshakeError(ecBadPayload, "expected SERVER_HELLO")
   let serverHello = parseJson(cast[string](serverHelloBlob))
-  if serverHello["version"].getInt() != 1: raise newException(HandshakeError, encodeReason(reasonCompat, "version mismatch"))
+  if serverHello["version"].getInt() != 1: raise newHandshakeError(ecCompat, "version mismatch")
   var dlAck = false
   var srvSandbox = true
   if serverHello.hasKey("features"):
@@ -304,28 +309,28 @@ proc clientHandshake*(sock: AsyncSocket, remoteId: string): Future[Session] {.as
   if serverHello.hasKey("sandbox"):
     srvSandbox = serverHello["sandbox"].getBool(true)
   if not dlAck:
-    raise newException(HandshakeError, encodeReason(reasonCompat, "server missing required feature dlAckV1"))
+    raise newHandshakeError(ecCompat, "server missing required feature dlAckV1")
   let requirePsk = serverHello.getOrDefault("requirePsk").getBool(false)
   let requireClientAuth = serverHello.getOrDefault("requireClientAuth").getBool(false)
   if requirePsk and clientPsk.len == 0:
-    raise newException(HandshakeError, encodeReason(reasonAuth, "server requires PSK"))
+    raise newHandshakeError(ecAuth, "server requires PSK")
   # Phase 3: receive SERVER_ID (Dilithium PK)
   let (t1, sIdBlob) = await recvBlob(sock)
   if t1 == 0x06'u8:
     let ec = if sIdBlob.len == 1: fromByte(sIdBlob[0]) else: ecUnknown
-    raise newException(HandshakeError, encodeClient(ec))
+    raise newHandshakeError(ec, "")
   if t1 != 0x01'u8:
     error "handshake: expected SERVER_ID, got ", t1
-    raise newException(HandshakeError, encodeReason(reasonBadPayload, "expected SERVER_ID"))
+    raise newHandshakeError(ecBadPayload, "expected SERVER_ID")
   var serverSignPk: PublicKey
-  if sIdBlob.len != serverSignPk.len: raise newException(HandshakeError, "bad SERVER_ID size")
+  if sIdBlob.len != serverSignPk.len: raise newHandshakeError(ecBadPayload, "bad SERVER_ID size")
   for i in 0 ..< serverSignPk.len: serverSignPk[i] = sIdBlob[i]
   let (havePin, pinned) = loadPinned(remoteId)
   if havePin:
     # Verify the pin matches
     var pinOk = true
     for i in 0 ..< pinned.len: pinOk = pinOk and (pinned[i] == serverSignPk[i])
-    if not pinOk: raise newException(HandshakeError, "server identity changed; aborting")
+    if not pinOk: raise newHandshakeError(ecAuth, "server identity changed; aborting")
   else:
     # First use: pin it
     savePinned(remoteId, serverSignPk)
@@ -334,11 +339,11 @@ proc clientHandshake*(sock: AsyncSocket, remoteId: string): Future[Session] {.as
   let (tKem, kemBlob) = await recvBlob(sock)
   if tKem == 0x06'u8:
     let ec = if kemBlob.len == 1: fromByte(kemBlob[0]) else: ecUnknown
-    raise newException(HandshakeError, encodeClient(ec))
-  if tKem != 0x02'u8: raise newException(HandshakeError, encodeReason(reasonBadPayload, "expected KEM_PK"))
+    raise newHandshakeError(ec, "")
+  if tKem != 0x02'u8: raise newHandshakeError(ecBadPayload, "expected KEM_PK")
   if kemBlob.len != kyber.PublicKeyBytes + dilithium.SignatureBytes:
     error "handshake: bad KEM_PK size=", kemBlob.len
-    raise newException(HandshakeError, "bad KEM_PK blob size")
+    raise newHandshakeError(ecBadPayload, "bad KEM_PK blob size")
   var kyberPk = newSeq[byte](kyber.PublicKeyBytes)
   for i in 0 ..< kyber.PublicKeyBytes: kyberPk[i] = kemBlob[i]
   var kyberPkSig: Signature
@@ -347,7 +352,7 @@ proc clientHandshake*(sock: AsyncSocket, remoteId: string): Future[Session] {.as
   let signatureOk = verifyDetached(kyberPkSig, kyberPk, serverSignPk)
   if not signatureOk:
     error "handshake: kyber pk signature invalid"
-    raise newException(HandshakeError, "kyber pk signature invalid")
+    raise newHandshakeError(ecAuth, "kyber pk signature invalid")
 
   # Phase 5: send KEM_ENV (envelope + prefixes)
   let (envelope, sharedSecret) = createEnvelope(kyberPk)
@@ -422,16 +427,16 @@ proc serverHandshake*(sock: AsyncSocket, srvSandboxed: bool): Future[Session] {.
     let requireClientAuth = cfg.server.requireClientAuth
     # Receive CLIENT_HELLO
     let (tc, chelloBlob) = await recvBlob(sock)
-    if tc != 0x00'u8: raise newException(HandshakeError, encodeReason(reasonBadPayload, "expected CLIENT_HELLO"))
+    if tc != 0x00'u8: raise newHandshakeError(ecBadPayload, "expected CLIENT_HELLO")
     let chello = parseJson(cast[string](chelloBlob))
-    if chello["version"].getInt() != 1: raise newException(HandshakeError, encodeReason(reasonCompat, "version mismatch"))
+    if chello["version"].getInt() != 1: raise newHandshakeError(ecCompat, "version mismatch")
     # Respond SERVER_HELLO (advertise features)
     var dlAckSrv = false
     if chello.hasKey("features"):
       for f in chello["features"]:
         if f.getStr() == "dlAckV1": dlAckSrv = true
     if not dlAckSrv:
-      raise newException(HandshakeError, encodeReason(reasonCompat, "client missing required feature dlAckV1"))
+      raise newHandshakeError(ecCompat, "client missing required feature dlAckV1")
     let serverHelloObj = %* {"version": 1, "cipher": "kyber-xchacha20",
                              "requirePsk": requirePsk, "requireClientAuth": requireClientAuth,
                              "features": @["dlAckV1"],
@@ -443,10 +448,9 @@ proc serverHandshake*(sock: AsyncSocket, srvSandboxed: bool): Future[Session] {.
       try:
         ensureServerIdentity()
       except HandshakeError as e:
-        # Wrap with server-config code if it lacked a code prefix
-        let (code, _) = splitReason(e.msg)
-        if code.len > 0: raise
-        raise newException(HandshakeError, encodeReason(reasonConfig, e.msg))
+        # Wrap with server-config code if it lacked a code
+        if e.code != ecUnknown: raise
+        raise newHandshakeError(ecConfig, e.msg)
 
     # 1) Send SERVER_ID (Dilithium PK)
     await sendBlob(sock, 0x01, bytesCopy(signPk))
@@ -463,10 +467,10 @@ proc serverHandshake*(sock: AsyncSocket, srvSandboxed: bool): Future[Session] {.
     let (t3, envBlob) = await recvBlob(sock)
     if t3 != 0x03'u8:
       error "handshake: expected KEM_ENV, got ", t3
-      raise newException(HandshakeError, encodeReason(reasonBadPayload, "expected KEM_ENV"))
+      raise newHandshakeError(ecBadPayload, "expected KEM_ENV")
     if envBlob.len != EnvelopeBytes + 32:
       error "handshake: bad KEM_ENV size=", envBlob.len
-      raise newException(HandshakeError, encodeReason(reasonBadPayload, "bad KEM_ENV size"))
+      raise newHandshakeError(ecBadPayload, "bad KEM_ENV size")
     var envelope: Envelope
     envelope.setLen(EnvelopeBytes)
     for i in 0 ..< EnvelopeBytes: envelope[i] = envBlob[i]
@@ -519,7 +523,7 @@ proc serverHandshake*(sock: AsyncSocket, srvSandboxed: bool): Future[Session] {.
     # Optional client authentication
     if requireClientAuth:
       let (ta, blob) = await recvBlob(sock)
-      if ta != 0x05'u8: raise newException(HandshakeError, encodeReason(reasonBadPayload, "expected CLIENT_AUTH"))
+      if ta != 0x05'u8: raise newHandshakeError(ecBadPayload, "expected CLIENT_AUTH")
       var cpk: PublicKey
       var sig: Signature
       for i in 0 ..< cpk.len: cpk[i] = blob[i]
@@ -541,23 +545,12 @@ proc serverHandshake*(sock: AsyncSocket, srvSandboxed: bool): Future[Session] {.
               if same: clientOk = true
       # Verify signature on transcript
       clientOk = clientOk and verifyDetached(sig, transcript, cpk)
-      if not clientOk: raise newException(HandshakeError, encodeReason(reasonAuth, "client auth failed"))
+      if not clientOk: raise newHandshakeError(ecAuth, "client auth failed")
     return sess
   except HandshakeError as e:
     # Return only an error code byte to client
-    var ec = ecUnknown
-    let (code, _) = splitReason(e.msg)
-    if code.len > 0:
-      case code
-      of reasonBadPayload: ec = ecBadPayload
-      of reasonCompat: ec = ecCompat
-      of reasonAuth: ec = ecAuth
-      of reasonConfig: ec = ecConfig
-      of reasonTimeout: ec = ecTimeout
-      of reasonNotFound: ec = ecNotFound
-      else: ec = ecUnknown
     try:
-      await sendBlob(sock, 0x06'u8, @[toByte(ec)])
+      await sendBlob(sock, 0x06'u8, @[toByte(e.code)])
     except CatchableError:
       discard
     raise e
