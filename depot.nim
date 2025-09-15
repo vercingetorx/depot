@@ -6,6 +6,7 @@ const version* = "0.1.0"
 # const commit* {.strdefine.}: string = "unknown"
 
 proc printVersion() =
+  ## Print program version. Keep simple for piping/grepping.
   echo fmt"depot v{version}"
 
 
@@ -139,6 +140,7 @@ proc runConfig(defaults: tuple[server: userconfig.ServerDefaults, client: userco
   var force = false
   var helpFlag = false
   var unknownFlags: seq[string]
+  # Parse CLI args with std/parseopt (supports long/short opts and args).
   for kind, key, val in getopt():
     if kind in {cmdLongOption, cmdShortOption}:
       case key
@@ -207,6 +209,8 @@ proc runExport(argsIn: var seq[string], hereFlag, allFlag: bool,
         usage(); return
     else:
       if not hereFlag:
+        # When not using --here, resolve relative args against the default
+        # export base so `depot export foo/bar` finds $BASE/depot/export/foo/bar.
         var resolved: seq[string]
         let baseExport = defaults.client.base / "depot" / "export"
         for a in args:
@@ -247,9 +251,10 @@ proc runImport(args: seq[string], hereFlag, allFlag: bool,
     var sess = waitFor client.openSession(host, remotePort)
     var rps: seq[string]
     for item in items:
+      # Join source directory and item, normalizing to forward slashes for wire.
       let rp = if remoteSource.len > 0: (remoteSource / item).replace("\\", "/") else: item
       rps.add(rp)
-    waitFor client.recvMany(sess, rps, localDest, skipExisting)
+      waitFor client.recvMany(sess, rps, localDest, skipExisting)
   except CatchableError as e:
     stderr.writeLine(errors.renderClient(e))
     quit(1)
