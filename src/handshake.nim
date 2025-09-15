@@ -128,8 +128,8 @@ proc encryptSecret*(plain: openArray[byte], pass: openArray[byte]): seq[byte] =
   outp
 
 proc deriveRekey*(trafficSecret: array[32, byte], epochBytes: openArray[byte]): (array[48, byte], array[48, byte]) =
-  ## Derive two 48-byte key blocks for c2s and s2c using BLAKE2b
-  ## keyed by the session trafficSecret and epoch bytes.
+  ## Derive two 48-byte key blocks for c2s and s2c using BLAKE2b,
+  ## keyed by the session trafficSecret and the new epoch bytes.
   var ctx1 = newBlake2bCtx(digestSize=48)
   ctx1.update(trafficSecret); ctx1.update("c2s"); ctx1.update(epochBytes)
   let out1 = ctx1.digest()
@@ -170,8 +170,10 @@ proc decryptSecret*(enc: openArray[byte], pass: openArray[byte]): tuple[ok: bool
   (ok, pt)
 
 proc ensureServerIdentity*(): (PublicKey, SecretKey) =
-  ## Load or generate the server's Dilithium identity keypair
-  ## under configDir()/id.
+  ## Load or generate the server's Dilithium identity keypair under configDir()/id.
+  ##
+  ## The secret key is stored encrypted (DPK1). First run requires a passphrase
+  ## to generate; subsequent runs require the same passphrase to decrypt.
   let dir = configDir() / "id"
   ensureDirExists(dir)
   let pkp = dir / "server_dilithium.pk"
@@ -204,8 +206,7 @@ proc ensureServerIdentity*(): (PublicKey, SecretKey) =
     return (pk, sk)
 
 proc ensureClientIdentity*(): (PublicKey, SecretKey) =
-  ## Load or generate the client's Dilithium identity keypair
-  ## under configDir()/id.
+  ## Load or generate the client's Dilithium identity keypair under configDir()/id.
   let dir = configDir() / "id"
   ensureDirExists(dir)
   let pkp = dir / "client_dilithium.pk"
@@ -279,11 +280,16 @@ proc recvBlob(sock: AsyncSocket): Future[(uint8, seq[byte])] {.async.} =
 # 0x05: CLIENT_AUTH (optional: Dilithium client PK + signature)
 
 proc clientHandshake*(sock: AsyncSocket, remoteId: string): Future[Session] {.async.} =
-  ## Client side of the TOFU-based handshake:
-  ## - Exchanges hello messages (JSON) and server identity
-  ## - Verifies Kyber PK via Dilithium signature, pins server key on first use
-  ## - Derives traffic keys via Kyber KEM + Argon2id (bound to transcript)
-  ## - Optionally authenticates the client using Dilithium
+  ## Client side of the TOFU-based handshake.
+  ##
+  ## Steps:
+  ## - Exchange hello messages (JSON) and parse advertised features.
+  ## - Receive server Dilithium PK, pin on first use and verify on later runs.
+  ## - Receive Kyber KEM public key signed by Dilithium; verify signature.
+  ## - Send KEM envelope and per-direction nonce prefixes.
+  ## - Derive traffic keys with Argon2id using shared secret, prefixes and a
+  ##   BLAKE2b transcript hash (binds keys to the handshake messages).
+  ## - Optionally authenticate the client using Dilithium over the transcript.
   let cfg = readConfig()
   let clientPsk = cfg.client.psk
   # 1) Send CLIENT_HELLO
@@ -420,7 +426,11 @@ proc clientHandshake*(sock: AsyncSocket, remoteId: string): Future[Session] {.as
   return sess
 
 proc serverHandshake*(sock: AsyncSocket, srvSandboxed: bool): Future[Session] {.async.} =
-  ## Server side of the handshake; mirrors clientHandshake.
+  ## Server side of the handshake (mirrors clientHandshake).
+  ##
+  ## Validates client features, advertises server constraints, sends identity,
+  ## signs and sends Kyber PK, receives envelope with prefixes, derives keys
+  ## bound to the transcript, and optionally verifies client authentication.
   try:
     let cfg = readConfig()
     let requirePsk = cfg.server.psk.len > 0
