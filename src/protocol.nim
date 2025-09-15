@@ -76,7 +76,7 @@ proc buildNonce(prefix: array[16, byte], seq: uint64): AeadNonce24 {.inline.} =
 proc sendRecord*(s: Session, rtype: uint8, payload: seq[byte]) {.async.} =
   ## Encrypt and send a single record as a single write:
   ## varint(len) | type | ciphertext | tag
-  # Phase: build associated data (type + tx sequence)
+  # Phase: build associated data (type + tx sequence + epoch)
   var associatedData = newSeq[byte](1)
   associatedData[0] = byte(rtype)
   associatedData.add(putUvar(uint64(s.seqTx)))
@@ -84,7 +84,7 @@ proc sendRecord*(s: Session, rtype: uint8, payload: seq[byte]) {.async.} =
   # Phase: seal payload
   let nonce = buildNonce(s.pTx, s.seqTx)
   let (ciphertext, tag) = aeadEncrypt(s.kTx, nonce, payload, associatedData)
-  # Phase: build full frame buffer
+  # Phase: build full frame buffer (varint length prefix + body)
   let bodyLen = 1 + ciphertext.len + tag.len
   let hdr = putUvar(uint64(bodyLen))
   let frameLen = hdr.len + bodyLen
@@ -108,7 +108,9 @@ proc sendRecord*(s: Session, rtype: uint8, payload: openArray[byte]): Future[voi
   return sendRecord(s, rtype, bytesCopy(payload))
 
 proc recvRecord*(s: Session): Future[(uint8, seq[byte])] {.async.} =
-  ## Read and decrypt a single record: returns (type, payload).
+  ## Read and decrypt a single record from the session.
+  ## Frame: varint(len) | type(1) | ciphertext | tag(16).
+  ## AEAD associated data binds (type, seqRx, epoch). seqRx advances on success.
   try:
     # Phase: parse length prefix
     let recLenU = await s.readVarint()
@@ -158,6 +160,7 @@ proc encodePathOpen*(relativePath: string, fileSize: int64, modificationTimeUnix
       ords.add(byte(ord(fp)))
   buf.add(putUvar(uint64(ords.len)))
   if ords.len > 0:
+    # Append raw ordinals after the count to avoid extra varints per bit
     buf.setLen(buf.len + ords.len)
     copyMem(addr buf[buf.high - ords.len + 1], unsafeAddr ords[0], ords.len)
   buf
@@ -190,6 +193,7 @@ proc parsePathOpen*(payload: openArray[byte]): tuple[relativePath: string, fileS
     var pset: set[FilePermission] = {}
     # read cnt ordinals as single bytes
     if offset + cnt <= payload.len:
+      # Interpret each ordinal as a FilePermission member
       var i = 0
       while i < cnt:
         let ordv = int(payload[offset + i])
@@ -293,5 +297,6 @@ proc parseListChunk*(payload: openArray[byte]): seq[tuple[relativePath: string, 
         break
     if next2 >= payload.len: break
     let k = payload[next2]
+    # kind=1 means directory (size ignored); kind=0 means file (size meaningful)
     off = next2 + 1
     result.add((p, int64(szU), k))
