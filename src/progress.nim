@@ -27,18 +27,6 @@ proc formatBytes*(x: int64): string =
   else:
     return fmt"{x} B"
 
-proc clearProgress*() =
-  ## Clear the current progress line from the terminal (if a TTY).
-  ## Resets internal throttle state so the next update prints immediately.
-  if prIsTty and prLastLen > 0:
-    stdout.write('\r')
-    stdout.write(fmt"{repeat(' ', prLastLen - 2)}")
-    stdout.write('\r')
-    stdout.flushFile()
-    prLastLen = 0
-    prLastPct = -1
-    prLastMs = 0
-
 proc envCols(): int =
   ## Best-effort detection of terminal width, with sane minimum fallback.
   try:
@@ -49,6 +37,30 @@ proc envCols(): int =
       result = max(40, parseInt(s))
     except ValueError:
       result = 80
+
+proc clearProgress*() =
+  ## Clear the current progress line from the terminal (if a TTY).
+  ## Erases all wrapped rows to avoid cascades on subsequent draws.
+  ## Resets internal throttle state so the next update prints immediately.
+  if prIsTty and prLastLen > 0:
+    # Compute how many rows the previous line occupied
+    let cols = envCols()
+    let rows = max(1, (prLastLen + cols - 1) div cols)
+    # Move to start of bottom row, then clear upwards
+    stdout.write("\r")
+    var i = 0
+    while i < rows:
+      stdout.write("\x1b[2K")
+      if i < rows - 1:
+        # Move cursor up one row and CR
+        stdout.write("\x1b[1A\r")
+      inc i
+    stdout.flushFile()
+    prLastLen = 0
+    prLastPct = -1
+    prLastMs = 0
+
+## envCols defined above (before first use)
 
 proc shortenName(name: string, maxLen: int): string =
   ## Abbreviate a file name to fit within maxLen by placing an ellipsis in
@@ -96,11 +108,21 @@ proc printProgress2*(action, name: string, done, total: int64, startMs: int64) =
   let cols = envCols()
   let base = fmt"{action} "
   var nm = name
-  let maxName = max(0, cols - (base.len + suffix.len + 1))
+  let maxName = max(0, cols - (base.len + suffix.len))
   nm = shortenName(nm, maxName)
   let line = fmt"{base}{nm}{suffix}"
   let pad = max(0, prLastLen - line.len)
-  stdout.write('\r')
+  # Erase all wrapped rows from previous draw
+  if prLastLen > 0:
+    let rowsPrev = max(1, (prLastLen + cols - 1) div cols)
+    stdout.write("\r")
+    var i = 0
+    while i < rowsPrev:
+      stdout.write("\x1b[2K")
+      if i < rowsPrev - 1:
+        stdout.write("\x1b[1A\r")
+      inc i
+  # Print the new line at the top row
   stdout.write(fmt"{line}{repeat(' ', pad)}")
   stdout.flushFile()
   prLastLen = line.len
