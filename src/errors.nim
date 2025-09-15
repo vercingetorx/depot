@@ -33,6 +33,12 @@ const
   reasonTimeout* = "timeout"
   reasonUnknown* = "unknown"
   reasonChecksum* = "checksum"
+  reasonClosed* = "closed"
+  reasonConnect* = "connect"
+  reasonProtocol* = "protocol"
+  reasonCommitFail* = "commit-fail"
+  reasonConflict* = "conflict"
+  reasonBadRemote* = "bad-remote"
   # Handshake/administrative categories
   reasonConfig* = "server-config"
   reasonCompat* = "compat"
@@ -55,6 +61,12 @@ type
     ecNotFound
     ecTimeout
     ecChecksum
+    ecClosed
+    ecConnect
+    ecProtocol
+    ecCommitFail
+    ecConflict
+    ecBadRemote
     ecConfig
     ecCompat
     ecAuth
@@ -75,6 +87,12 @@ proc codeName*(c: ErrorCode): string =
   of ecNotFound: reasonNotFound
   of ecTimeout: reasonTimeout
   of ecChecksum: reasonChecksum
+  of ecClosed: reasonClosed
+  of ecConnect: reasonConnect
+  of ecProtocol: reasonProtocol
+  of ecCommitFail: reasonCommitFail
+  of ecConflict: reasonConflict
+  of ecBadRemote: reasonBadRemote
   of ecConfig: reasonConfig
   of ecCompat: reasonCompat
   of ecAuth: reasonAuth
@@ -101,6 +119,12 @@ proc clientMessage*(c: ErrorCode): string =
   of ecNotFound: "item not found"
   of ecTimeout: "timeout"
   of ecChecksum: "checksum mismatch"
+  of ecClosed: "connection closed unexpectedly"
+  of ecConnect: "couldn't connect to server"
+  of ecProtocol: "protocol error"
+  of ecCommitFail: "commit failed on server"
+  of ecConflict: "conflicting destination"
+  of ecBadRemote: "invalid remote spec"
   of ecConfig: "server misconfigured"
   of ecCompat: "incompatible client/server"
   of ecAuth: "authentication required or failed"
@@ -122,6 +146,12 @@ proc serverMessage*(c: ErrorCode): string =
   of ecNotFound: "not found"
   of ecTimeout: "timeout"
   of ecChecksum: "checksum mismatch"
+  of ecClosed: "peer closed connection"
+  of ecConnect: "client connection error"
+  of ecProtocol: "protocol violation"
+  of ecCommitFail: "commit failed"
+  of ecConflict: "conflict"
+  of ecBadRemote: "bad remote spec"
   of ecConfig: "server configuration error"
   of ecCompat: "feature/version mismatch"
   of ecAuth: "client authentication error"
@@ -129,51 +159,90 @@ proc serverMessage*(c: ErrorCode): string =
 
 import std/strformat
 
+type
+  CodedError* = object of CatchableError
+    code*: ErrorCode
+
+proc newCodedError*(code: ErrorCode, message: string): ref CodedError =
+  ## Construct a coded exception carrying an ErrorCode and a message.
+  result = newException(CodedError, message)
+  result.code = code
+
 proc encodeClient*(c: ErrorCode): string = fmt"[{codeName(c)}] {clientMessage(c)}"
 proc encodeServer*(c: ErrorCode): string = fmt"[{codeName(c)}] {serverMessage(c)}"
 
 proc encodeReason*(code, message: string): string = fmt"[{code}] {message}"
 
-proc splitReason*(msg: string): tuple[code, text: string] =
-  ## If `msg` starts with "[code] ", extract code and remainder; otherwise code="".
-  if msg.len >= 3 and msg[0] == '[':
-    let idx = msg.find(']')
-    if idx > 1 and idx+2 <= msg.high:
-      let code = msg[1 .. idx-1]
-      let rest = msg[min(idx+2, msg.len) .. ^1]
-      return (code, rest)
-  ("", msg)
+# Success/status codes (typed)
+type
+  SuccessCode* = enum
+    scConnected
+    scHandshake
+    scUploadStart
+    scUploadComplete
+    scSendStart
+    scSendComplete
+    scDownloadRequest
+    scDownloadComplete
+    scListFile
+    scListDir
+    scListComplete
+    scRekey
+    scDisconnected
+    scTransferred
+    scDone
+    scSkip
+    scAbort
 
-proc reasonFromServerMsg*(msg: string): string =
-  ## Map a server error message to a short reason code.
-  ## Prefers a leading "[code] " prefix; falls back to heuristics.
-  let (code, _) = splitReason(msg)
-  if code.len > 0: return code
-  if msg.startsWith(errFileExists): return reasonExists
-  if msg.startsWith(errAbsolutePathSandbox): return reasonAbsolute
-  if msg.startsWith(errUnsafePath): return reasonUnsafePath
-  if msg.startsWith(errBadPath): return reasonBadPath
-  if msg.startsWith(errBadPayload): return reasonBadPayload
-  if msg.startsWith(errOpenFail): return reasonOpenFail
-  if msg.startsWith(errWriteFail): return reasonWriteFail
-  if msg.startsWith(errReadFail): return reasonReadFail
-  if msg.startsWith(errNotFound): return reasonNotFound
-  if msg.startsWith(errChecksumMismatch): return reasonChecksum
-  return reasonUnknown
+proc successName*(c: SuccessCode): string =
+  case c
+  of scConnected: "connected"
+  of scHandshake: "handshake"
+  of scUploadStart: "upload-start"
+  of scUploadComplete: "upload-complete"
+  of scSendStart: "send-start"
+  of scSendComplete: "send-complete"
+  of scDownloadRequest: "download-request"
+  of scDownloadComplete: "download-complete"
+  of scListFile: "list-file"
+  of scListDir: "list-dir"
+  of scListComplete: "list-complete"
+  of scRekey: "rekey"
+  of scDisconnected: "disconnected"
+  of scTransferred: "transferred"
+  of scDone: "done"
+  of scSkip: "skip"
+  of scAbort: "abort"
 
-proc formatClientError*(msg: string): string =
-  ## Standardize client-facing error messages using structured reason codes.
-  ## If `msg` has a leading "[code] ", preserve it. Otherwise, infer a code
-  ## from known error prefixes and wrap: "[code] message".
-  let m = msg.strip()
-  if m.len > 2 and m[0] == '[':
-    return m
-  # Prefer mapping via known server/client message prefixes
-  let code = reasonFromServerMsg(m)
-  if code != reasonUnknown:
-    return encodeReason(code, m)
-  # Add a generic code for unclassified messages
-  return encodeReason(reasonUnknown, m)
+proc encodeOk*(code: SuccessCode, message: string): string = encodeReason(successName(code), message)
+proc encodeSkip*(message: string): string = encodeOk(scSkip, message)
+
+proc renderClient*(e: ref CatchableError): string =
+  ## Render a CatchableError as a client-facing "[code] message" string.
+  if e of CodedError:
+    let ce = cast[ref CodedError](e)
+    if ce.msg.len > 0:
+      return fmt"{encodeClient(ce.code)}: {ce.msg}"
+    return encodeClient(ce.code)
+  # Fallback for non-coded errors
+  let m = e.msg.strip()
+  if m.len == 0: return encodeClient(ecUnknown) else: fmt"{encodeClient(ecUnknown)}: {m}"
+
+# Error severity policy helpers
+proc getErrorCode*(e: ref CatchableError): ErrorCode =
+  if e of CodedError: return cast[ref CodedError](e).code
+  ecUnknown
+
+proc isSessionFatal*(c: ErrorCode): bool =
+  c in {ecClosed, ecTimeout, ecProtocol, ecCompat, ecAuth, ecConfig, ecConnect}
+
+proc isLocalFatal*(c: ErrorCode): bool =
+  c in {ecNoSpace, ecPerms, ecOpenFail, ecWriteFail, ecReadFail}
+
+proc isPerItem*(c: ErrorCode): bool =
+  c in {ecExists, ecNotFound, ecBadPath, ecUnsafePath, ecAbsolute, ecChecksum, ecFilter}
+
+# Legacy PathSkip reason mapping has been removed; PathSkip carries no payload.
 
 proc osErrorToCode*(e: ref OSError, fallback: ErrorCode): ErrorCode =
   ## Map platform-specific OSError codes to protocol ErrorCode variants.
