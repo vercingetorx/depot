@@ -225,7 +225,7 @@ proc runExport(argsIn: var seq[string], hereFlag, allFlag: bool,
     var sess = waitFor client.openSession(host, remotePort)
     waitFor client.sendMany(sess, args, remoteDest, skipExisting)
   except CatchableError as e:
-    stderr.writeLine(errors.renderClient(e))
+    stderr.writeLine(errors.render(e, errors.auClient))
     quit(1)
   except OSError as e:
     stderr.writeLine(e.msg)
@@ -254,9 +254,11 @@ proc runImport(args: seq[string], hereFlag, allFlag: bool,
       # Join source directory and item, normalizing to forward slashes for wire.
       let rp = if remoteSource.len > 0: (remoteSource / item).replace("\\", "/") else: item
       rps.add(rp)
-      waitFor client.recvMany(sess, rps, localDest, skipExisting)
+    # Perform a single multi-item receive to avoid duplicate attempts and
+    # ensure one session-wide summary is printed.
+    waitFor client.recvMany(sess, rps, localDest, skipExisting)
   except CatchableError as e:
-    stderr.writeLine(errors.renderClient(e))
+    stderr.writeLine(errors.render(e, errors.auClient))
     quit(1)
   except OSError as e:
     stderr.writeLine(e.msg)
@@ -270,7 +272,7 @@ proc runLs(remotePath: string,
     var sess = waitFor client.openSession(host, remotePort)
     waitFor client.list(sess, remotePath)
   except CatchableError as e:
-    stderr.writeLine(errors.renderClient(e))
+    stderr.writeLine(errors.render(e, errors.auClient))
     quit(1)
   except OSError as e:
     stderr.writeLine(e.msg)
@@ -433,7 +435,7 @@ when isMainModule:
   try:
     main()
   except CatchableError as e:
-    stderr.writeLine(errors.renderClient(e))
+    stderr.writeLine(errors.render(e, errors.auClient))
     quit(1)
   except OSError as e:
     stderr.writeLine(e.msg)
