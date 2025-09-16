@@ -42,19 +42,19 @@ proc handleClient*(sock: AsyncSocket, baseDir: string) {.async.} =
   proc infoSid(msg: string) = info fmt"[{sid}] {msg}"
   proc errorSid(msg: string) = error fmt"[{sid}] {msg}"
 
-  infoSid(errors.encodeOk(errors.scConnected, fmt"client connected: {getPeerAddr(sock)}"))
+  infoSid(errors.status(errors.scConnected, fmt"client connected: {getPeerAddr(sock)}"))
   # Perform handshake; if it fails, log and close this client without
   # impacting the main accept loop.
   var session: Session
   try:
     session = await serverHandshake(sock, sandboxed)
   except handshake.HandshakeError as e:
-    let logMsg = if e.msg.len > 0: fmt"{errors.encodeServer(e.code)}: {e.msg}" else: errors.encodeServer(e.code)
+    let logMsg = if e.msg.len > 0: fmt"{errors.encodeError(e.code, errors.auServer)}: {e.msg}" else: errors.encodeError(e.code, errors.auServer)
     errorSid(logMsg)
     try: sock.close() except: discard
-    infoSid(errors.encodeOk(errors.scDisconnected, "client disconnected"))
+    infoSid(errors.status(errors.scDisconnected, "client disconnected"))
     return
-  infoSid(errors.encodeOk(errors.scHandshake, "handshake complete"))
+  infoSid(errors.status(errors.scHandshake, "handshake complete"))
   let (exportDir, importDir) = ensureBaseDirs(baseDir)
   # Phase: mutable transfer state (per-connection)
   # currentFile: open handle for the active upload (.part file)
@@ -80,9 +80,9 @@ proc handleClient*(sock: AsyncSocket, baseDir: string) {.async.} =
   proc replyError(ec: ErrorCode, context: string = "") {.async.} =
     ## Log a server-coded error and send an ErrorRec with that code.
     if context.len > 0:
-      errorSid(fmt"{errors.encodeServer(ec)}: {context}")
+      errorSid(fmt"{errors.encodeError(ec, errors.auServer)}: {context}")
     else:
-      errorSid(errors.encodeServer(ec))
+      errorSid(errors.encodeError(ec, errors.auServer))
     await session.sendRecord(ErrorRec.uint8, @[toByte(ec)])
 
   # Focused helpers for non-recursive listing
@@ -98,13 +98,13 @@ proc handleClient*(sock: AsyncSocket, baseDir: string) {.async.} =
     buf.add(item)
     await session.sendRecord(ListChunk.uint8, buf)
     await session.sendRecord(ListDone.uint8, newSeq[byte]())
-    infoSid(errors.encodeOk(errors.scListFile, fmt"{relReqFull}"))
+    infoSid(errors.status(errors.scListFile, fmt"{relReqFull}"))
 
   proc listDirectory(absReq: string, relReqFull: string) {.async.} =
     ## Stream a non-recursive listing for 'absReq'. Entries are batched into
     ## ~64 KiB ListChunk frames and closed with a ListDone record. Paths are
     ## made relative to 'absReq' and use forward slashes for the wire format.
-    infoSid(errors.encodeOk(errors.scListDir, fmt"{relReqFull}"))
+    infoSid(errors.status(errors.scListDir, fmt"{relReqFull}"))
     var chunk = newSeq[byte]()
     var count = 0
     for it in walkDir(absReq):
@@ -134,7 +134,7 @@ proc handleClient*(sock: AsyncSocket, baseDir: string) {.async.} =
     if chunk.len > 0:
       await session.sendRecord(ListChunk.uint8, chunk)
     await session.sendRecord(ListDone.uint8, newSeq[byte]())
-    infoSid(errors.encodeOk(errors.scListComplete, fmt"{relReqFull} ({count} entries)"))
+    infoSid(errors.status(errors.scListComplete, fmt"{relReqFull} ({count} entries)"))
 
   ## Begin an upload session for a single file.
   ##
@@ -152,14 +152,14 @@ proc handleClient*(sock: AsyncSocket, baseDir: string) {.async.} =
     if sandboxed:
       # In sandbox, absolute destinations are forbidden.
       if relativeDestPath.len > 0 and relativeDestPath[0] == '/':
-        errorSid(errors.encodeServer(ecAbsolute))
+        errorSid(errors.encodeError(ecAbsolute, errors.auServer))
         await session.sendRecord(UploadFail.uint8, @[toByte(ecAbsolute)])
         return
       try:
         # Constrain destination under depot/import, rejecting traversal.
         destAbs = cleanJoin(importDir, relativeDestPath)
       except CatchableError:
-        errorSid(errors.encodeServer(ecUnsafePath))
+        errorSid(errors.encodeError(ecUnsafePath, errors.auServer))
         await session.sendRecord(UploadFail.uint8, @[toByte(ecUnsafePath)])
         return
     else:
@@ -169,13 +169,13 @@ proc handleClient*(sock: AsyncSocket, baseDir: string) {.async.} =
         destAbs = normalizedPath(importDir / relativeDestPath)
     currentPath = destAbs
     partialPath = common.partPath(currentPath)
-    infoSid(errors.encodeOk(errors.scUploadStart, fmt"upload start: {relativeDestPath}"))
+    infoSid(errors.status(errors.scUploadStart, fmt"upload start: {relativeDestPath}"))
     uploadHasher = newBlake2bCtx(digestSize=32)
     pendingMtimeUnix = srcMtimeUnix
     pendingPermissions = srcPerms
     # Refuse early if destination exists (unless overwriting is enabled).
     if fileExists(currentPath) and not allowOverwrite:
-      errorSid(errors.encodeServer(ecExists))
+      errorSid(errors.encodeError(ecExists, errors.auServer))
       await session.sendRecord(UploadFail.uint8, @[toByte(ecExists)])
       return
     # Ensure parent directories exist and aren't symlinks (avoid trickery).
@@ -185,7 +185,7 @@ proc handleClient*(sock: AsyncSocket, baseDir: string) {.async.} =
       try:
         let info = getFileInfo(parentDir)
         if info.kind == pcLinkToDir:
-          errorSid(errors.encodeServer(ecUnsafePath))
+          errorSid(errors.encodeError(ecUnsafePath, errors.auServer))
           await session.sendRecord(UploadFail.uint8, @[toByte(ecUnsafePath)])
           return
       except OSError:
@@ -195,9 +195,25 @@ proc handleClient*(sock: AsyncSocket, baseDir: string) {.async.} =
       currentFile = open(partialPath, fmWrite)
     except OSError as e:
       let ec = errors.osErrorToCode(e, ecOpenFail)
-      errorSid(errors.encodeServer(ec))
+      errorSid(errors.encodeError(ec, errors.auServer))
       await session.sendRecord(UploadFail.uint8, @[toByte(ec)])
       return
+    # Propose rekey at a safe sync point before replying
+    if (common.monoMs() - session.lastRekeyMs) > session.rekeyIntervalMs and session.pendingEpoch == 0'u32:
+      var epochBytes: array[4, byte]
+      let newEpoch = session.epoch + 1'u32
+      epochBytes[0] = byte(newEpoch and 0xff)
+      epochBytes[1] = byte((newEpoch shr 8) and 0xff)
+      epochBytes[2] = byte((newEpoch shr 16) and 0xff)
+      epochBytes[3] = byte((newEpoch shr 24) and 0xff)
+      let (out1, out2) = handshake.deriveRekey(session.trafficSecret, epochBytes)
+      # Stash pending keys to be activated after the client acknowledges (RekeyAck)
+      for i in 0 ..< 32: session.pendingKRx[i] = out1[i]
+      for i in 0 ..< 16: session.pendingPRx[i] = out1[32 + i]
+      for i in 0 ..< 32: session.pendingKTx[i] = out2[i]
+      for i in 0 ..< 16: session.pendingPTx[i] = out2[32 + i]
+      session.pendingEpoch = newEpoch
+      await session.sendRecord(RekeyReq.uint8, epochBytes)
     await session.sendRecord(UploadOk.uint8, newSeq[byte]())
 
   ## Handle a file data chunk for the current upload.
@@ -212,7 +228,7 @@ proc handleClient*(sock: AsyncSocket, baseDir: string) {.async.} =
         uploadHasher.update(payload)  # rolling hash for integrity verification
       except OSError as e:
         let ec = errors.osErrorToCode(e, ecWriteFail)
-        errorSid(errors.encodeServer(ec))
+        errorSid(errors.encodeError(ec, errors.auServer))
         try: currentFile.close() except: discard
         currentFile = nil
         discard tryRemoveFile(partialPath)
@@ -229,7 +245,7 @@ proc handleClient*(sock: AsyncSocket, baseDir: string) {.async.} =
       currentFile.close()
       # verify checksum payload
       if payload.len != 32:
-        errorSid(errors.encodeServer(ecChecksum))
+        errorSid(errors.encodeError(ecChecksum, errors.auServer))
         discard tryRemoveFile(partialPath)
         await sendErrorCode(ecChecksum)
         currentFile = nil
@@ -242,7 +258,7 @@ proc handleClient*(sock: AsyncSocket, baseDir: string) {.async.} =
         for i in 0 ..< 32:
           if got[i] != payload[i]: match = false
       if not match:
-        errorSid(errors.encodeServer(ecChecksum))
+        errorSid(errors.encodeError(ecChecksum, errors.auServer))
         discard tryRemoveFile(partialPath)
         await sendErrorCode(ecChecksum)
         currentFile = nil
@@ -250,7 +266,7 @@ proc handleClient*(sock: AsyncSocket, baseDir: string) {.async.} =
         partialPath = ""
         return
       if fileExists(currentPath) and not allowOverwrite:
-        errorSid(errors.encodeServer(ecExists))
+        errorSid(errors.encodeError(ecExists, errors.auServer))
         discard tryRemoveFile(partialPath)
         await sendErrorCode(ecExists)
       else:
@@ -268,11 +284,26 @@ proc handleClient*(sock: AsyncSocket, baseDir: string) {.async.} =
             setFilePermissions(currentPath, pendingPermissions)
           except CatchableError:
             discard
-          infoSid(errors.encodeOk(errors.scUploadComplete, fmt"{currentPath}"))
+          infoSid(errors.status(errors.scUploadComplete, fmt"{currentPath}"))
+          # Propose rekey at a safe sync point before signaling UploadDone
+          if (common.monoMs() - session.lastRekeyMs) > session.rekeyIntervalMs and session.pendingEpoch == 0'u32:
+            var epochBytes: array[4, byte]
+            let newEpoch = session.epoch + 1'u32
+            epochBytes[0] = byte(newEpoch and 0xff)
+            epochBytes[1] = byte((newEpoch shr 8) and 0xff)
+            epochBytes[2] = byte((newEpoch shr 16) and 0xff)
+            epochBytes[3] = byte((newEpoch shr 24) and 0xff)
+            let (out1, out2) = handshake.deriveRekey(session.trafficSecret, epochBytes)
+            for i in 0 ..< 32: session.pendingKRx[i] = out1[i]
+            for i in 0 ..< 16: session.pendingPRx[i] = out1[32 + i]
+            for i in 0 ..< 32: session.pendingKTx[i] = out2[i]
+            for i in 0 ..< 16: session.pendingPTx[i] = out2[32 + i]
+            session.pendingEpoch = newEpoch
+            await session.sendRecord(RekeyReq.uint8, epochBytes)
           await session.sendRecord(UploadDone.uint8, newSeq[byte]())
         except OSError as e:
           let ec = errors.osErrorToCode(e, ecOpenFail)
-          errorSid(errors.encodeServer(ec))
+          errorSid(errors.encodeError(ec, errors.auServer))
           discard tryRemoveFile(partialPath)
           await sendErrorCode(ec)
       currentFile = nil
@@ -327,7 +358,7 @@ proc handleClient*(sock: AsyncSocket, baseDir: string) {.async.} =
         for i in 0 ..< 32: session.pendingKTx[i] = out2[i]
         for i in 0 ..< 16: session.pendingPTx[i] = out2[32 + i]
         session.pendingEpoch = newEpoch
-        infoSid(errors.encodeOk(errors.scRekey, fmt"propose epoch={newEpoch}"))
+        infoSid(errors.status(errors.scRekey, fmt"propose epoch={newEpoch}"))
         await session.sendRecord(RekeyReq.uint8, epochBytes)
 
     proc absFromRel(baseAbs: string, relativePath: string): string =
@@ -348,9 +379,9 @@ proc handleClient*(sock: AsyncSocket, baseDir: string) {.async.} =
         let (atk, _) = await session.recvRecord()
         if atk == PathAccept.uint8: return true
         if atk == PathSkip.uint8:
-          infoSid(errors.encodeSkip(fmt"client skipped: {relativePath}"))
+          infoSid(errors.status(errors.scSkip, fmt"client skipped: {relativePath}"))
           return false
-        infoSid(errors.encodeSkip(fmt"unexpected ack, treating as skip: type={atk}"))
+        infoSid(errors.status(errors.scSkip, fmt"unexpected ack, treating as skip: type={atk}"))
         return false
       return true
 
@@ -374,7 +405,7 @@ proc handleClient*(sock: AsyncSocket, baseDir: string) {.async.} =
       # PathOpen payload includes: relative path, file size, mtime (unix), and permissions
       await session.sendRecord(PathOpen.uint8, payload)
       if not await awaitAck(wireRel): return
-      infoSid(errors.encodeOk(errors.scSendStart, fmt"{wireRel} ({fileSize} bytes)"))
+      infoSid(errors.status(errors.scSendStart, fmt"{wireRel} ({fileSize} bytes)"))
       try:
         var f = open(absPath, fmRead)
         defer: f.close()
@@ -387,7 +418,7 @@ proc handleClient*(sock: AsyncSocket, baseDir: string) {.async.} =
           await session.sendRecord(FileData.uint8, buf.toOpenArray(0, n-1))
         let dig = fileSendHasher.digest()
         await session.sendRecord(FileClose.uint8, dig)
-        infoSid(errors.encodeOk(errors.scSendComplete, fmt"{wireRel}"))
+        infoSid(errors.status(errors.scSendComplete, fmt"{wireRel}"))
       except OSError as e:
         let ec = errors.osErrorToCode(e, ecReadFail)
         await replyError(ec, e.msg)
@@ -405,16 +436,16 @@ proc handleClient*(sock: AsyncSocket, baseDir: string) {.async.} =
         await sendFileToClient(fsRel, common.toWirePath(relWithTop))
         inc count
       await session.sendRecord(DownloadDone.uint8, newSeq[byte]())
-      infoSid(errors.encodeOk(errors.scDownloadComplete, fmt"{relReqFull} ({count} files)"))
+      infoSid(errors.status(errors.scDownloadComplete, fmt"{relReqFull} ({count} files)"))
 
     if fileExists(absReq):
-      infoSid(errors.encodeOk(errors.scDownloadRequest, fmt"{relReqFull}"))
+      infoSid(errors.status(errors.scDownloadRequest, fmt"{relReqFull}"))
       let fsRel = if absReq.isRelativeTo(exportDir): absReq.relativePath(exportDir) else: relReqFull
       let wireRel = common.toWirePath(fsRel)
       await sendFileToClient(fsRel, wireRel)
       await session.sendRecord(DownloadDone.uint8, newSeq[byte]())
     elif dirExists(absReq):
-      infoSid(errors.encodeOk(errors.scDownloadRequest, fmt"dir {relReqFull}"))
+      infoSid(errors.status(errors.scDownloadRequest, fmt"dir {relReqFull}"))
       await sendTreeToClient(absReq)
     else:
       await replyError(ecNotFound, relReqFull)
@@ -458,7 +489,7 @@ proc handleClient*(sock: AsyncSocket, baseDir: string) {.async.} =
       # and false if it timed out. Treat false as a timeout condition.
       if not await withTimeout(fut, session.ioTimeoutMs):
         await session.sendRecord(ErrorRec.uint8, @[toByte(ecTimeout)])
-        errorSid(fmt"{errors.encodeServer(ecTimeout)}: session timeout; closing connection")
+        errorSid(fmt"{errors.encodeError(ecTimeout, errors.auServer)}: session timeout; closing connection")
         break
       let (t, payload) = await fut
       if payload.len == 0 and t == 0'u8:
@@ -479,26 +510,40 @@ proc handleClient*(sock: AsyncSocket, baseDir: string) {.async.} =
       of uint8(ListOpen):
         # Client requests a non-recursive listing
         await handleListRequest(payload)
+      of uint8(RekeyAck):
+        # Client acknowledges rekey; activate pending keys and reset counters
+        if payload.len == 4 and session.pendingEpoch != 0'u32:
+          let eb = payload
+          let ackEpoch = uint32(eb[0]) or (uint32(eb[1]) shl 8) or (uint32(eb[2]) shl 16) or (uint32(eb[3]) shl 24)
+          if ackEpoch == session.pendingEpoch:
+            session.epoch = session.pendingEpoch
+            for i in 0 ..< 32: session.kTx[i] = session.pendingKTx[i]
+            for i in 0 ..< 32: session.kRx[i] = session.pendingKRx[i]
+            for i in 0 ..< 16: session.pTx[i] = session.pendingPTx[i]
+            for i in 0 ..< 16: session.pRx[i] = session.pendingPRx[i]
+            session.seqTx = 0; session.seqRx = 0
+            session.lastRekeyMs = common.monoMs()
+            session.pendingEpoch = 0'u32
       of uint8(ErrorRec):
         # Client surfaced an error; log code if present
         if payload.len == 1:
           let ec = fromByte(payload[0])
-          errorSid(errors.encodeServer(ec))
+          errorSid(errors.encodeError(ec, errors.auServer))
         else:
-          errorSid(errors.encodeServer(ecUnknown))
+          errorSid(errors.encodeError(ecUnknown, errors.auServer))
       else:
         discard
   except CatchableError as e:
-    errorSid(errors.renderClient(e))
+    errorSid(errors.render(e, errors.auServer))
   except OSError as e:
-    errorSid(fmt"{errors.encodeServer(ecReadFail)}: {e.msg}")
+    errorSid(fmt"{errors.encodeError(ecReadFail, errors.auServer)}: {e.msg}")
   finally:
     # Phase: cleanup
     if currentFile != nil:
       currentFile.close()
       discard tryRemoveFile(partialPath) # cleanup partial on abrupt end
     sock.close()
-    infoSid(errors.encodeOk(errors.scDisconnected, "client disconnected"))
+    infoSid(errors.status(errors.scDisconnected, "client disconnected"))
 
 proc serve*(listen: string, port: int, baseDir: string) {.async.} =
   ## Accept loop: binds and accepts clients, spawning handleClient for each.
