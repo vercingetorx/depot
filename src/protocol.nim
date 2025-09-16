@@ -5,6 +5,15 @@ import common
 import varint
 
 type
+  ## Session-wide transfer statistics (client-maintained; zero-initialized).
+  SessionStats* = object
+    sentFiles*: int
+    sentBytes*: int64
+    recvFiles*: int
+    recvBytes*: int64
+    skipped*: int
+    failed*: int
+
   ## Encrypted record channel with keys, nonces, and sequence counters.
   Session* = ref object
     sock*: AsyncSocket
@@ -33,6 +42,8 @@ type
     pendingKRx*: array[32, byte]
     pendingPTx*: array[16, byte]
     pendingPRx*: array[16, byte]
+    # Client-side session statistics (unused on server)
+    stats*: SessionStats
 
 type
   SocketClosedError = object of CatchableError
