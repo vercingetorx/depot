@@ -103,59 +103,65 @@ proc fromByte*(b: byte): ErrorCode =
   let v = uint8(b)
   if v <= uint8(high(ErrorCode)): ErrorCode(v) else: ecUnknown
 
-proc clientMessage*(c: ErrorCode): string =
-  case c
-  of ecExists: "file exists on remote server"
-  of ecFilter: "skipped by filter"
-  of ecNoSpace: "no space left"
-  of ecPerms: "permission denied"
-  of ecAbsolute: "absolute path not allowed"
-  of ecUnsafePath: "unsafe path"
-  of ecBadPath: "bad path"
-  of ecBadPayload: "bad payload"
-  of ecOpenFail: "open failed"
-  of ecWriteFail: "write failed"
-  of ecReadFail: "read failed"
-  of ecNotFound: "item not found"
-  of ecTimeout: "timeout"
-  of ecChecksum: "checksum mismatch"
-  of ecClosed: "connection closed unexpectedly"
-  of ecConnect: "couldn't connect to server"
-  of ecProtocol: "protocol error"
-  of ecCommitFail: "commit failed on server"
-  of ecConflict: "conflicting destination"
-  of ecBadRemote: "invalid remote spec"
-  of ecConfig: "server misconfigured"
-  of ecCompat: "incompatible client/server"
-  of ecAuth: "authentication required or failed"
-  else: "error"
+type
+  Audience* = enum
+    auClient, auServer
 
-proc serverMessage*(c: ErrorCode): string =
-  case c
-  of ecExists: "refusing overwrite"
-  of ecFilter: "filtered"
-  of ecNoSpace: "disk full"
-  of ecPerms: "access denied"
-  of ecAbsolute: "absolute path not allowed"
-  of ecUnsafePath: "unsafe path rejected"
-  of ecBadPath: "bad path"
-  of ecBadPayload: "bad payload"
-  of ecOpenFail: "open failed"
-  of ecWriteFail: "write failed"
-  of ecReadFail: "read failed"
-  of ecNotFound: "not found"
-  of ecTimeout: "timeout"
-  of ecChecksum: "checksum mismatch"
-  of ecClosed: "peer closed connection"
-  of ecConnect: "client connection error"
-  of ecProtocol: "protocol violation"
-  of ecCommitFail: "commit failed"
-  of ecConflict: "conflict"
-  of ecBadRemote: "bad remote spec"
-  of ecConfig: "server configuration error"
-  of ecCompat: "feature/version mismatch"
-  of ecAuth: "client authentication error"
-  else: "unknown"
+proc messageText*(c: ErrorCode, a: Audience): string =
+  ## Return a short human-oriented message for an ErrorCode, tailored by audience.
+  case a
+  of auClient:
+    case c
+    of ecExists: "file exists on remote server"
+    of ecFilter: "skipped by filter"
+    of ecNoSpace: "no space left"
+    of ecPerms: "permission denied"
+    of ecAbsolute: "absolute path not allowed"
+    of ecUnsafePath: "unsafe path"
+    of ecBadPath: "bad path"
+    of ecBadPayload: "bad payload"
+    of ecOpenFail: "open failed"
+    of ecWriteFail: "write failed"
+    of ecReadFail: "read failed"
+    of ecNotFound: "item not found"
+    of ecTimeout: "timeout"
+    of ecChecksum: "checksum mismatch"
+    of ecClosed: "connection closed unexpectedly"
+    of ecConnect: "couldn't connect to server"
+    of ecProtocol: "protocol error"
+    of ecCommitFail: "commit failed on server"
+    of ecConflict: "conflicting destination"
+    of ecBadRemote: "invalid remote spec"
+    of ecConfig: "server misconfigured"
+    of ecCompat: "incompatible client/server"
+    of ecAuth: "authentication required or failed"
+    else: "error"
+  of auServer:
+    case c
+    of ecExists: "refusing overwrite"
+    of ecFilter: "filtered"
+    of ecNoSpace: "disk full"
+    of ecPerms: "access denied"
+    of ecAbsolute: "absolute path not allowed"
+    of ecUnsafePath: "unsafe path rejected"
+    of ecBadPath: "bad path"
+    of ecBadPayload: "bad payload"
+    of ecOpenFail: "open failed"
+    of ecWriteFail: "write failed"
+    of ecReadFail: "read failed"
+    of ecNotFound: "not found"
+    of ecTimeout: "timeout"
+    of ecChecksum: "checksum mismatch"
+    of ecClosed: "peer closed connection"
+    of ecConnect: "client connection error"
+    of ecProtocol: "protocol violation"
+    of ecCommitFail: "commit failed"
+    of ecConflict: "conflict"
+    of ecBadRemote: "bad remote spec"
+    of ecConfig: "server configuration error"
+    of ecCompat: "feature/version mismatch"
+    of ecAuth: "client authentication error"
+    else: "unknown"
 
 import std/strformat
 
@@ -168,10 +174,7 @@ proc newCodedError*(code: ErrorCode, message: string): ref CodedError =
   result = newException(CodedError, message)
   result.code = code
 
-proc encodeClient*(c: ErrorCode): string = fmt"[{errorName(c)}] {clientMessage(c)}"
-proc encodeServer*(c: ErrorCode): string = fmt"[{errorName(c)}] {serverMessage(c)}"
-
-proc encodeReason*(code, message: string): string = fmt"[{code}] {message}"
+proc encodeError*(c: ErrorCode, a: Audience): string = fmt"[{errorName(c)}] {messageText(c, a)}"
 
 # Success/status codes (typed)
 type
@@ -214,19 +217,18 @@ proc successName*(c: SuccessCode): string =
   of scSkip: "skip"
   of scAbort: "abort"
 
-proc encodeOk*(code: SuccessCode, message: string): string = encodeReason(successName(code), message)
-proc encodeSkip*(message: string): string = encodeOk(scSkip, message)
+proc status*(code: SuccessCode, message: string): string = fmt"[{successName(code)}] {message}"
 
-proc renderClient*(e: ref CatchableError): string =
-  ## Render a CatchableError as a client-facing "[code] message" string.
+proc render*(e: ref CatchableError, a: Audience): string =
+  ## Render a CatchableError as an audience-facing "[code] message" string.
   if e of CodedError:
     let ce = cast[ref CodedError](e)
     if ce.msg.len > 0:
-      return fmt"{encodeClient(ce.code)}: {ce.msg}"
-    return encodeClient(ce.code)
+      return fmt"{encodeError(ce.code, a)}: {ce.msg}"
+    return encodeError(ce.code, a)
   # Fallback for non-coded errors
   let m = e.msg.strip()
-  if m.len == 0: return encodeClient(ecUnknown) else: fmt"{encodeClient(ecUnknown)}: {m}"
+  if m.len == 0: return encodeError(ecUnknown, a) else: fmt"{encodeError(ecUnknown, a)}: {m}"
 
 # Error severity policy helpers
 proc getErrorCode*(e: ref CatchableError): ErrorCode =
