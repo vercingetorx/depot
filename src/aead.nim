@@ -27,8 +27,8 @@
 ##   performed; callers should manage key material lifetimes appropriately.
 
 import std/[sysrand]
-import ../private/chacha20
-import ../private/poly1305
+import ../private/chacha20/chacha20
+import ../private/chacha20/poly1305
 
 type
   ## 256-bit secret key for XChaCha20.
