@@ -89,8 +89,7 @@ const dpkMagic = "DPK1"
 var serverKeyPassphrase* = ""
 
 proc kdfKey(pass: openArray[byte], salt: openArray[byte]): array[32, byte] =
-  let ctx = newArgon2Ctx(pass, salt=salt, timeCost=2, memoryCost=65536, digestSize=32)
-  let km = ctx.digest()
+  let km = argon2Hash(pass, salt=salt, timeCost=2, memoryCost=65536, digestSize=32)
   for i in 0 ..< 32: result[i] = km[i]
 
 proc encryptSecret*(plain: openArray[byte], pass: openArray[byte]): seq[byte] =
@@ -391,8 +390,7 @@ proc clientHandshake*(sock: AsyncSocket, remoteId: string): Future[Session] {.as
   if clientPsk.len > 0:
     transcriptHasher.update(clientPsk)
   let transcript = transcriptHasher.digest()
-  let argon2Ctx = newArgon2Ctx(sharedSecret, salt=salt, assocData=transcript, timeCost=argon2TCost, memoryCost=argon2MCost, digestSize=64)
-  let keyMaterial = argon2Ctx.digest()
+  let keyMaterial = argon2Hash(sharedSecret, salt=salt, assocData=transcript, timeCost=argon2TCost, memoryCost=argon2MCost, digestSize=64)
   var sess: Session
   new(sess)
   sess.sock = sock
@@ -507,8 +505,7 @@ proc serverHandshake*(sock: AsyncSocket, srvSandboxed: bool): Future[Session] {.
     if requirePsk:
       h.update(cfg.server.psk)
     let transcript = h.digest()
-    let a2 = newArgon2Ctx(sharedSecret, salt=salt, assocData=transcript, timeCost=argon2TCost, memoryCost=argon2MCost, digestSize=64)
-    let keyMaterial = a2.digest()
+    let keyMaterial = argon2Hash(sharedSecret, salt=salt, assocData=transcript, timeCost=argon2TCost, memoryCost=argon2MCost, digestSize=64)
     var sess: Session
     new(sess)
     sess.sock = sock
