@@ -2,7 +2,7 @@
 
 <!-- Center align -->
 <div align="center">
-![depot logo](https://raw.githubusercontent.com/vercingetorx/depot/refs/heads/main/resources/depot_icon_with_letters.png)
+  <img src="[image.jpg](https://raw.githubusercontent.com/vercingetorx/depot/refs/heads/main/resources/depot_icon_with_letters.png)" alt="depot_logo" width="400">
 </div>
 
 # Depot — Secure File Transfer (Kyber + XChaCha20)
