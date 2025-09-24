@@ -1,6 +1,7 @@
 # WIP
 
-![alt text](https://raw.githubusercontent.com/vercingetorx/depot/refs/heads/main/resources/depot_icon_with_letters.png)
+<!-- Center align -->
+![depot logo](https://raw.githubusercontent.com/vercingetorx/depot/refs/heads/main/resources/depot_icon_with_letters.png)
 
 # Depot — Secure File Transfer (Kyber + XChaCha20)
 
