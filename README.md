@@ -1,5 +1,7 @@
 # WIP
 
+![alt text](https://raw.githubusercontent.com/vercingetorx/depot/refs/heads/main/resources/depot_icon_with_letters.png)
+
 # Depot — Secure File Transfer (Kyber + XChaCha20)
 
 Depot is a simple, post‑quantum‑ready file transfer tool. It favors a clean CLI, strong defaults, and explicit safety:
