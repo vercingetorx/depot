@@ -1,4 +1,4 @@
-# <CURRENTLY IN ALPHA>
+# CURRENTLY IN ALPHA
 
 <!-- Center align -->
 <div align="center">
