@@ -72,6 +72,9 @@ depot import folder --host server --here
 
 # Pull the entire share
 depot import --all --host server
+
+# omit --host if host is set in config file
+depot export file.ext
 ```
 
 ## CLI
