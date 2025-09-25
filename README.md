@@ -74,7 +74,7 @@ depot import folder --host server --here
 depot import --all --host server
 
 # omit --host if host is set in config file
-depot export file.ext
+depot export file1.ext fil2.ext dir1
 ```
 
 ## CLI
