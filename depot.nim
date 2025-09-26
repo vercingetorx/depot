@@ -38,80 +38,80 @@ sandbox = true
   echo "Wrote config: ", path
 
 proc usage() =
-  echo "depot: secure file transfer (Kyber + XChaCha20-Poly1305)"
-  echo "usage:"
-  echo "  depot --version"
-  echo "  depot --init [--force]"
-  echo "  depot serve [--help]"
-  echo "  depot export [--help]"
-  echo "  depot import [--help]"
-  echo "  depot ls [--help]"
-  echo "  depot config --init [--force]          # scaffold ~/.config/depot/depot.conf"
-  echo ""
-  echo "Use 'depot <subcommand> --help' to see all options."
+  stderr.writeLine("depot: secure file transfer (Kyber + XChaCha20-Poly1305)")
+  stderr.writeLine("usage:")
+  stderr.writeLine("  depot --version")
+  stderr.writeLine("  depot --init [--force]")
+  stderr.writeLine("  depot serve [--help]")
+  stderr.writeLine("  depot export [--help]")
+  stderr.writeLine("  depot import [--help]")
+  stderr.writeLine("  depot ls [--help]")
+  stderr.writeLine("  depot config --init [--force]          # scaffold ~/.config/depot/depot.conf")
+  stderr.writeLine("")
+  stderr.writeLine("Use 'depot <subcommand> --help' to see all options.")
 
 proc usageServe() =
-  echo "depot serve [options]"
-  echo "  --listen IP            Bind address (default from config)"
-  echo "  --port N               TCP port to listen on"
-  echo "  --base DIR             Base directory for default roots"
-  echo "  --log LEVEL            Log level: debug|info|warn|error"
-  echo "  --no-sandbox           Disable sandbox (allow absolute paths)"
-  echo "  --allow-overwrite      Allow uploads to overwrite existing files"
-  echo "  --key-pass PASS        Encrypt/load server key with this passphrase"
-  echo "  --key-pass-file PATH   Read key passphrase from file"
-  echo ""
-  echo "Key management:"
-  echo "  - First run requires a passphrase (\"--key-pass\" or \"--key-pass-file\") to"
-  echo "    generate and store an encrypted server key (DPK1)."
-  echo "  - Subsequent runs require the same passphrase to load the key."
-  echo "  - Plaintext server keys are not supported."
+  stderr.writeLine("depot serve [options]")
+  stderr.writeLine("  --listen IP            Bind address (default from config)")
+  stderr.writeLine("  --port N               TCP port to listen on")
+  stderr.writeLine("  --base DIR             Base directory for default roots")
+  stderr.writeLine("  --log LEVEL            Log level: debug|info|warn|error")
+  stderr.writeLine("  --no-sandbox           Disable sandbox (allow absolute paths)")
+  stderr.writeLine("  --allow-overwrite      Allow uploads to overwrite existing files")
+  stderr.writeLine("  --key-pass PASS        Encrypt/load server key with this passphrase")
+  stderr.writeLine("  --key-pass-file PATH   Read key passphrase from file")
+  stderr.writeLine("")
+  stderr.writeLine("Key management:")
+  stderr.writeLine("  - First run requires a passphrase (\"--key-pass\" or \"--key-pass-file\") to")
+  stderr.writeLine("    generate and store an encrypted server key (DPK1).")
+  stderr.writeLine("  - Subsequent runs require the same passphrase to load the key.")
+  stderr.writeLine("  - Plaintext server keys are not supported.")
 
 proc usageConfig() =
-  echo "depot config --init [--force]"
-  echo "  --init  Scaffold ~/.config/depot/depot.conf"
-  echo "  --force Overwrite existing config"
+  stderr.writeLine("depot config --init [--force]")
+  stderr.writeLine("  --init  Scaffold ~/.config/depot/depot.conf")
+  stderr.writeLine("  --force Overwrite existing config")
 
 proc usageExport() =
-  echo "depot export FILE... [options]"
-  echo "  --host HOST            Server host"
-  echo "  --port N               Server port (alias: --rport)"
-  echo "  --rport N              Server port"
-  echo "  --remote-dir DIR       Remote base directory (see below)"
-  echo "  --here                 Resolve FILE relative to current directory"
-  echo "  --all                  Export the entire default export root"
-  echo "  --skip-existing        Skip files that already exist on server"
-  echo "  --log LEVEL            Log level: debug|info|warn|error"
-  echo ""
-  echo "Sandboxed server: --remote-dir must be relative to the server's upload area."
-  echo "No-sandbox server: --remote-dir may be absolute."
+  stderr.writeLine("depot export FILE... [options]")
+  stderr.writeLine("  --host HOST            Server host")
+  stderr.writeLine("  --port N               Server port (alias: --rport)")
+  stderr.writeLine("  --rport N              Server port")
+  stderr.writeLine("  --remote-dir DIR       Remote base directory (see below)")
+  stderr.writeLine("  --here                 Resolve FILE relative to current directory")
+  stderr.writeLine("  --all                  Export the entire default export root")
+  stderr.writeLine("  --skip-existing        Skip files that already exist on server")
+  stderr.writeLine("  --log LEVEL            Log level: debug|info|warn|error")
+  stderr.writeLine("")
+  stderr.writeLine("Sandboxed server: --remote-dir must be relative to the server's upload area.")
+  stderr.writeLine("No-sandbox server: --remote-dir may be absolute.")
 
 proc usageImport() =
-  echo "depot import ITEM... [options]"
-  echo "  --host HOST            Server host"
-  echo "  --port N               Server port (alias: --rport)"
-  echo "  --rport N              Server port"
-  echo "  --remote-dir DIR       Remote base directory (see below)"
-  echo "  --dest LOCAL_DIR       Local destination directory"
-  echo "  --local-dir LOCAL_DIR  Alias of --dest"
-  echo "  --here                 Use current directory as destination"
-  echo "  --all                  Import entire tree from remote source ('.')"
-  echo "  --skip-existing        Skip local files that already exist"
-  echo "  --log LEVEL            Log level: debug|info|warn|error"
-  echo ""
-  echo "Sandboxed server: --remote-dir must be relative to the server's download area."
-  echo "No-sandbox server: --remote-dir may be absolute."
+  stderr.writeLine("depot import ITEM... [options]")
+  stderr.writeLine("  --host HOST            Server host")
+  stderr.writeLine("  --port N               Server port (alias: --rport)")
+  stderr.writeLine("  --rport N              Server port")
+  stderr.writeLine("  --remote-dir DIR       Remote base directory (see below)")
+  stderr.writeLine("  --dest LOCAL_DIR       Local destination directory")
+  stderr.writeLine("  --local-dir LOCAL_DIR  Alias of --dest")
+  stderr.writeLine("  --here                 Use current directory as destination")
+  stderr.writeLine("  --all                  Import entire tree from remote source ('.')")
+  stderr.writeLine("  --skip-existing        Skip local files that already exist")
+  stderr.writeLine("  --log LEVEL            Log level: debug|info|warn|error")
+  stderr.writeLine("")
+  stderr.writeLine("Sandboxed server: --remote-dir must be relative to the server's download area.")
+  stderr.writeLine("No-sandbox server: --remote-dir may be absolute.")
 
 proc usageLs() =
-  echo "depot ls [options]"
-  echo "  --host HOST            Server host"
-  echo "  --port N               Server port (alias: --rport)"
-  echo "  --rport N              Server port"
-  echo "  --remote-dir DIR       Remote directory or file to list"
-  echo "  --log LEVEL            Log level: debug|info|warn|error"
-  echo ""
-  echo "Sandboxed server: --remote-dir must be relative to the server's download area."
-  echo "No-sandbox server: --remote-dir may be absolute."
+  stderr.writeLine("depot ls [options]")
+  stderr.writeLine("  --host HOST            Server host")
+  stderr.writeLine("  --port N               Server port (alias: --rport)")
+  stderr.writeLine("  --rport N              Server port")
+  stderr.writeLine("  --remote-dir DIR       Remote directory or file to list")
+  stderr.writeLine("  --log LEVEL            Log level: debug|info|warn|error")
+  stderr.writeLine("")
+  stderr.writeLine("Sandboxed server: --remote-dir must be relative to the server's download area.")
+  stderr.writeLine("No-sandbox server: --remote-dir may be absolute.")
 
 proc usageFor(mode: string) =
   case mode
@@ -151,9 +151,9 @@ proc runConfig(defaults: tuple[server: userconfig.ServerDefaults, client: userco
         let flag = (if kind == cmdLongOption: fmt"--{key}" else: fmt"-{key}")
         unknownFlags.add(flag)
   if helpFlag:
-    echo "depot config --init [--force]"
-    echo "  --init  Scaffold ~/.config/depot/depot.conf"
-    echo "  --force Overwrite existing config"
+    stderr.writeLine("depot config --init [--force]")
+    stderr.writeLine("  --init  Scaffold ~/.config/depot/depot.conf")
+    stderr.writeLine("  --force Overwrite existing config")
     return
   if unknownFlags.len > 0:
     var msg = "Unknown option(s) for 'config': "
@@ -206,7 +206,7 @@ proc runExport(argsIn: var seq[string], hereFlag, allFlag: bool,
       elif hereFlag:
         args = @[getCurrentDir()]
       else:
-        usage(); return
+        usageExport(); return
     else:
       if not hereFlag:
         # When not using --here, resolve relative args against the default
@@ -242,7 +242,7 @@ proc runImport(args: seq[string], hereFlag, allFlag: bool,
     if allFlag:
       items = @["."]
     if items.len < 1:
-      usage(); return
+      usageImport(); return
     if hereFlag:
       localDest = getCurrentDir()
     if localDest.len > 0:
