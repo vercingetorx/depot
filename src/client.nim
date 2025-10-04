@@ -259,38 +259,15 @@ proc sendTree*(sess: Session, localRoot: string, remoteDir: string, skipExisting
   if base.len == 0: base = "."
   if not base.endsWith("/"): base &= "/"
 
-  # Phase: helpers for each upload unit
-  proc uploadSingleFile(path: string) {.async.} =
-    ## Upload a single file (non-directory) under the computed base.
-    try:
-      # Single file goes under base using its filename
-      let remoteRel = base & extractFilename(path)
-      await sendFile(sess, path, remoteRel)
-      clearProgress()
-      echo errors.status(errors.scDone, fmt"{path} ({formatBytes(getFileSize(path))})")
-    except CatchableError as e:
-      let code = errors.getErrorCode(e)
-      if errors.isSessionFatal(code) or errors.isLocalFatal(code):
-        stderr.writeLine(errors.render(e, errors.auClient))
-        raise
-      elif code == ecExists and skipExisting:
-        echo errors.status(errors.scSkip, fmt"existing {path}")
-        incSkip(sess)
-      else:
-        addFailure("export", absolutePath(path), code)
-        stderr.writeLine(errors.render(e, errors.auClient))
-        incFail(sess)
-
   proc uploadDirTree(rootPath: string) {.async.} =
     ## Walk directory tree and upload each regular file under base/topName.
     let root = absolutePath(rootPath)
     let topName = extractFilename(root)
     for p in walkDirRec(rootPath):
       if dirExists(p): continue
-      let relativeSubpath = p.relativePath(root)
+      let relativeSubpath = p.relativePath(rootPath)
       try:
-        let remoteRel = base & (if topName.len > 0: (common.toWirePath(topName) & "/") else: "") & common.toWirePath(relativeSubpath)
-        await sendFile(sess, p, remoteRel)
+        await sendFile(sess, p, relativeSubpath)
         clearProgress()
         echo errors.status(errors.scDone, fmt"{p} ({formatBytes(getFileSize(p))})")
       except CatchableError as e:
@@ -306,14 +283,7 @@ proc sendTree*(sess: Session, localRoot: string, remoteDir: string, skipExisting
           stderr.writeLine(errors.render(e, errors.auClient))
           incFail(sess)
 
-  # Phase: dispatch by source type
-  if dirExists(localRoot):
-    await uploadDirTree(localRoot)
-  elif fileExists(localRoot):
-    await uploadSingleFile(localRoot)
-  else:
-    stderr.writeLine(fmt"{errors.encodeError(ecNotFound, errors.auClient)}: {localRoot}")
-  # No per-tree summary; session summary is printed by sendMany
+  await uploadDirTree(localRoot)
 
 ## Download a remote file or directory tree into localDest.
 ## Includes the top-level directory name locally, handles PathAccept/Skip,
@@ -365,13 +335,8 @@ proc recvTree*(sess: Session, remotePath: string, localDest: string, skipExistin
         targetPath = localDest
       else:
         raise errors.newCodedError(ecConflict, "")
-    if skipExisting and fileExists(targetPath):
-      echo errors.status(errors.scSkip, fmt"existing {targetPath} ({formatBytes(totalBytes)})")
-      incSkip(sess)
-      skipCurrent = true
-    else:
-      partFile = open(common.partPath(targetPath), fmWrite)
-      fileOpen = true
+    partFile = open(common.partPath(targetPath), fmWrite)
+    fileOpen = true
     firstFile = false
     receivedBytes = 0
     startMs = nowMs()
@@ -469,11 +434,12 @@ proc recvTree*(sess: Session, remotePath: string, localDest: string, skipExistin
         await sess.sendRecord(PathSkip.uint8, newSeq[byte]())
         skipCurrent = true
         if skipExisting:
-          echo errors.status(errors.scSkip, fmt"existing {fullPath} ({formatBytes(fileSize)})")
+          echo errors.status(errors.scSkip, fmt"path exists {fullPath} ({formatBytes(fileSize)})")
         else:
           # Defer a local existence error until end-of-item to mirror behavior
           # while ensuring render() does not duplicate encoded text.
           pendingErr = fullPath
+        incSkip(sess) 
         continue
       else:
         await sess.sendRecord(PathAccept.uint8, newSeq[byte]())
