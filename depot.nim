@@ -311,7 +311,7 @@ proc main() =
   var unsafeFs = defaults.server.sandbox == false
   var hereFlag = false
   var helpFlag = false
-  var skipExisting = false
+  var skipExisting = true
   var allowOverwrite = false
   var versionFlag = false
   var topInitFlag = false
@@ -357,7 +357,7 @@ proc main() =
     of "failures": failures = true
     of "here": hereFlag = true
     of "help", "h": helpFlag = true
-    of "skip-existing", "skip": skipExisting = true
+    of "no-skip", "noskip": skipExisting = false
     else:
       let flag = if opt.len > 1 and opt[0] == '-': opt else: fmt"--{opt}"
       unknownFlags.add(flag)
