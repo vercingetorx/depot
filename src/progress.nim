@@ -52,9 +52,9 @@ proc clearProgress*() =
     var i = 0
     while i < rows:
       stdout.write("\x1b[2K")
-      if i < rows - 1:
+      # if i < rows - 1:
         # Move cursor up one row and CR
-        stdout.write("\x1b[1A\r")
+        # stdout.write("\x1b[1A\r")
       inc i
     stdout.flushFile()
     prLastLen = 0
