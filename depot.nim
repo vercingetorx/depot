@@ -5,6 +5,7 @@ import src/[client, handshake, server, userconfig, errors]
 const version* = "0.1.0"
 # const commit* {.strdefine.}: string = "unknown"
 
+
 proc printVersion() =
   ## Print program version. Keep simple for piping/grepping.
   echo fmt"depot v{version}"
@@ -37,6 +38,7 @@ sandbox = true
   writeFile(path, tpl)
   echo "Wrote config: ", path
 
+
 proc usage() =
   stderr.writeLine("depot: secure file transfer (Kyber + XChaCha20-Poly1305)")
   stderr.writeLine("usage:")
@@ -49,6 +51,7 @@ proc usage() =
   stderr.writeLine("  depot config --init [--force]          # scaffold ~/.config/depot/depot.conf")
   stderr.writeLine("")
   stderr.writeLine("Use 'depot <subcommand> --help' to see all options.")
+
 
 proc usageServe() =
   stderr.writeLine("depot serve [options]")
@@ -67,10 +70,12 @@ proc usageServe() =
   stderr.writeLine("  - Subsequent runs require the same passphrase to load the key.")
   stderr.writeLine("  - Plaintext server keys are not supported.")
 
+
 proc usageConfig() =
   stderr.writeLine("depot config --init [--force]")
   stderr.writeLine("  --init  Scaffold ~/.config/depot/depot.conf")
   stderr.writeLine("  --force Overwrite existing config")
+
 
 proc usageExport() =
   stderr.writeLine("depot export FILE... [options]")
@@ -85,6 +90,7 @@ proc usageExport() =
   stderr.writeLine("")
   stderr.writeLine("Sandboxed server: --remote-dir must be relative to the server's upload area.")
   stderr.writeLine("No-sandbox server: --remote-dir may be absolute.")
+
 
 proc usageImport() =
   stderr.writeLine("depot import ITEM... [options]")
@@ -102,6 +108,7 @@ proc usageImport() =
   stderr.writeLine("Sandboxed server: --remote-dir must be relative to the server's download area.")
   stderr.writeLine("No-sandbox server: --remote-dir may be absolute.")
 
+
 proc usageLs() =
   stderr.writeLine("depot ls [options]")
   stderr.writeLine("  --host HOST            Server host")
@@ -113,6 +120,7 @@ proc usageLs() =
   stderr.writeLine("Sandboxed server: --remote-dir must be relative to the server's download area.")
   stderr.writeLine("No-sandbox server: --remote-dir may be absolute.")
 
+
 proc usageFor(mode: string) =
   case mode
   of "serve": usageServe()
@@ -121,6 +129,7 @@ proc usageFor(mode: string) =
   of "ls": usageLs()
   of "config": usageConfig()
   else: usage()
+
 
 proc setupLogging(level: string) =
   ## Configure console logger with a consistent format and chosen level.
@@ -133,6 +142,7 @@ proc setupLogging(level: string) =
   of "warn", "warning": setLogFilter(lvlWarn)
   of "error": setLogFilter(lvlError)
   else: setLogFilter(lvlInfo)
+
 
 proc runConfig(defaults: tuple[server: userconfig.ServerDefaults, client: userconfig.ClientDefaults]) =
   ## Handle `depot config` subcommand. Currently supports `--init` and `--force`.
@@ -169,6 +179,7 @@ proc runConfig(defaults: tuple[server: userconfig.ServerDefaults, client: userco
   usage()
   return
 
+
 proc runServe(listen: string, port: int, baseDir: string, unsafeFs: bool) =
   ## Handle `depot serve` subcommand.
   # Phase: configure sandbox + overrides, then start accept loop
@@ -189,6 +200,7 @@ proc runServe(listen: string, port: int, baseDir: string, unsafeFs: bool) =
   info fmt"server starting: listen={listen}, port={port}, sandbox={server.sandboxed}, base={baseDir}"
   asyncCheck server.serve(listen, port, baseDir)
   runForever()
+
 
 proc runExport(argsIn: var seq[string], hereFlag, allFlag: bool,
                remoteDest: string, skipExisting: bool,
@@ -231,6 +243,7 @@ proc runExport(argsIn: var seq[string], hereFlag, allFlag: bool,
     stderr.writeLine(e.msg)
     quit(1)
 
+
 proc runImport(args: seq[string], hereFlag, allFlag: bool,
                remoteSource: string, localDestIn: string,
                host: string, remotePort: int, skipExisting: bool) =
@@ -264,6 +277,7 @@ proc runImport(args: seq[string], hereFlag, allFlag: bool,
     stderr.writeLine(e.msg)
     quit(1)
 
+
 proc runLs(remotePath: string,
             defaults: tuple[server: userconfig.ServerDefaults, client: userconfig.ClientDefaults],
             host: string, remotePort: int) =
@@ -277,6 +291,7 @@ proc runLs(remotePath: string,
   except OSError as e:
     stderr.writeLine(e.msg)
     quit(1)
+
 
 proc main() =
   let defaults = userconfig.readConfig()
@@ -430,6 +445,7 @@ proc main() =
     runLs(remoteList, defaults, host, remotePort)
   else:
     usage()
+
 
 when isMainModule:
   try:
