@@ -432,8 +432,7 @@ proc handleClient*(sock: AsyncSocket, baseDir: string) {.async.} =
       for p in walkDirRec(baseAbs):
         if dirExists(p): continue
         let fsRel = p.relativePath(baseAbs)
-        let relWithTop = if baseName.len > 0: (baseName & "/" & fsRel) else: fsRel
-        await sendFileToClient(fsRel, common.toWirePath(relWithTop))
+        await sendFileToClient(fsRel, common.toWirePath(fsRel))
         inc count
       await session.sendRecord(DownloadDone.uint8, newSeq[byte]())
       infoSid(errors.status(errors.scDownloadComplete, fmt"{relReqFull} ({count} files)"))
