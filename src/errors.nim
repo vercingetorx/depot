@@ -112,7 +112,7 @@ proc messageText*(c: ErrorCode, a: Audience): string =
   case a
   of auClient:
     case c
-    of ecExists: "file exists on remote server"
+    of ecExists: "file exists"
     of ecFilter: "skipped by filter"
     of ecNoSpace: "no space left"
     of ecPerms: "permission denied"
