@@ -129,5 +129,3 @@ proc printProgress2*(action, name: string, done, total: int64, startMs: int64) =
   prLastLen = line.len
   prLastPct = pct
   prLastMs = now
-
-## end
