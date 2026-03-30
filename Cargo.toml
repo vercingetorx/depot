@@ -28,4 +28,5 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt"] }
 walkdir = "2.5"
 filetime = "0.2"
+unicode-width = "0.2"
 latebra = { path = "../latebra" }

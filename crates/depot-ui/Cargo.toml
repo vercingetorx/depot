@@ -11,3 +11,5 @@ path = "src/lib.rs"
 [dependencies]
 depot-core = { path = "../depot-core" }
 depot-protocol = { path = "../depot-protocol" }
+depot-transport = { path = "../depot-transport" }
+unicode-width.workspace = true

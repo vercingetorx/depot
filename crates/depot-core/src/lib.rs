@@ -1,6 +1,7 @@
 use std::fmt;
 use std::path::PathBuf;
 use std::str::FromStr;
+use std::time::Duration;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LogLevel {
@@ -187,6 +188,30 @@ pub enum Operation {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransferProgressAction {
+    Uploading,
+    Downloading,
+}
+
+impl TransferProgressAction {
+    pub fn tag(self) -> &'static str {
+        match self {
+            Self::Uploading => "[uploading]",
+            Self::Downloading => "[downloading]",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TransferProgress {
+    pub action: TransferProgressAction,
+    pub name: String,
+    pub done_bytes: u64,
+    pub total_bytes: Option<u64>,
+    pub elapsed: Duration,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ErrorCode {
     Unknown,
     Exists,
@@ -323,6 +348,31 @@ impl Outcome {
     pub fn should_abort_batch(&self) -> bool {
         self.severity == OutcomeSeverity::Fatal
     }
+}
+
+pub fn classify_outcome_severity(code: ErrorCode) -> OutcomeSeverity {
+    if code == ErrorCode::Unknown {
+        return OutcomeSeverity::Fatal;
+    }
+    if matches!(code, ErrorCode::Exists | ErrorCode::Filter) {
+        return OutcomeSeverity::Skipped;
+    }
+    if code.is_session_fatal() || code.is_local_fatal() {
+        return OutcomeSeverity::Fatal;
+    }
+    if matches!(
+        code,
+        ErrorCode::Exists
+            | ErrorCode::NotFound
+            | ErrorCode::BadPath
+            | ErrorCode::UnsafePath
+            | ErrorCode::Absolute
+            | ErrorCode::Checksum
+            | ErrorCode::Filter
+    ) {
+        return OutcomeSeverity::ItemError;
+    }
+    OutcomeSeverity::Fatal
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
