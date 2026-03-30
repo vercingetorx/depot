@@ -1,0 +1,15 @@
+[package]
+name = "depot-fs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "depot_fs"
+path = "src/lib.rs"
+
+[dependencies]
+depot-core = { path = "../depot-core" }
+
+[dev-dependencies]
+tempfile.workspace = true

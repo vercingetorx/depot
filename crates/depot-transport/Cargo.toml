@@ -1,0 +1,15 @@
+[package]
+name = "depot-transport"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "depot_transport"
+path = "src/lib.rs"
+
+[dependencies]
+depot-core = { path = "../depot-core" }
+depot-crypto = { path = "../depot-crypto" }
+depot-protocol = { path = "../depot-protocol" }
+tokio.workspace = true

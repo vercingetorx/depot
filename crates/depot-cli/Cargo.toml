@@ -1,0 +1,25 @@
+[package]
+name = "depot-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "depot_cli"
+path = "src/lib.rs"
+
+[dependencies]
+clap.workspace = true
+depot-app = { path = "../depot-app" }
+depot-config = { path = "../depot-config" }
+depot-core = { path = "../depot-core" }
+depot-crypto = { path = "../depot-crypto" }
+depot-ui = { path = "../depot-ui" }
+tokio.workspace = true
+
+[[bin]]
+name = "depot"
+path = "src/main.rs"
+
+[dev-dependencies]
+tempfile.workspace = true
