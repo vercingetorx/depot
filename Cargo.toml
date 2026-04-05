@@ -1,32 +1,21 @@
-[workspace]
-members = [
-  "crates/depot-app",
-  "crates/depot-cli",
-  "crates/depot-config",
-  "crates/depot-core",
-  "crates/depot-crypto",
-  "crates/depot-fs",
-  "crates/depot-protocol",
-  "crates/depot-transport",
-  "crates/depot-ui",
-]
-resolver = "2"
-
-[workspace.package]
+[package]
+name = "depot"
+version = "0.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
-version = "0.1.0"
 
-[workspace.dependencies]
+[dependencies]
 bytes = "1.10"
 clap = { version = "4.5", features = ["derive"] }
+filetime = "0.2"
+latebra = { path = "../../security/latebra" }
 serde = { version = "1.0", features = ["derive"] }
-tempfile = "3.20"
 tokio = { version = "1.47", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
 toml = "0.9"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt"] }
-walkdir = "2.5"
-filetime = "0.2"
 unicode-width = "0.2"
-latebra = { path = "../latebra" }
+walkdir = "2.5"
+
+[dev-dependencies]
+tempfile = "3.20"
