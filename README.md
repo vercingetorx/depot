@@ -1,3 +1,8 @@
+<!-- Center align -->
+<div align="center">
+  <img src="https://raw.githubusercontent.com/vercingetorx/depot/refs/heads/master/resources/depot_icon_with_letters_small.png" alt="depot_logo" width="250">
+</div>
+
 # Depot — Secure File Transfer (ML-KEM + XChaCha20)
 
 Depot is a simple, post-quantum-ready file transfer tool. It favors a clean CLI, strong defaults, and explicit safety:
@@ -12,8 +17,6 @@ Depot is a simple, post-quantum-ready file transfer tool. It favors a clean CLI,
 - Sandboxed filesystem mode by default (no absolute paths; normalized under the server root).
 - Atomic write/commit with integrity-on-commit checksums; partials removed on abort.
 
-For architectural details, crate boundaries, and implementation notes, see [ARCHITECTURE.md](/media/extra/documents/coding/rust/depot_rust/ARCHITECTURE.md).
-
 ## Build
 
 Requires Rust and Cargo.
@@ -24,7 +27,7 @@ cargo build --release
 
 ## Quick Start
 
-1. Scaffold a config for stable defaults like host, port, log level, sandbox, and auth settings:
+1. Scaffold a config for stable defaults like host, port, log level, and sandbox:
 
 ```bash
 depot config --init
@@ -138,7 +141,7 @@ Config is only for stable preferences. Server pathing is not configured here. `d
 - AEAD framing uses typed encrypted records over TCP.
 - Nonces use a per-direction prefix and counter.
 - The server does not invoke a shell to parse paths; the protocol is structured and binary.
-- The Rust implementation uses `latebra` as its crypto library.
+- The Rust implementation uses public crates for its crypto stack: `libcrux-ml-kem`, `libcrux-ml-dsa`, `chacha20poly1305`, `argon2`, and `blake3`.
 
 ## Transfer Semantics
 
