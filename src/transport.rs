@@ -1,7 +1,7 @@
 use crate::core::{ErrorCode, SandboxPolicy};
 use crate::crypto::{
-    CryptoError, CryptoProvider, HandshakeCryptoProvider, RekeyMaterial, SessionKeys,
-    SigningIdentity, Transcript, latebra,
+    CryptoError, CryptoProvider, HandshakeCryptoProvider, MlDsa87PublicKey, RekeyMaterial,
+    SessionKeys, SigningIdentity, Transcript,
 };
 use crate::protocol::{
     ClientAuthPayload, ClientHello, ClientKemPayload, CodecError, EncodedHandshakeBlob, Frame,
@@ -81,9 +81,9 @@ impl SecureChannelState {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone)]
 pub struct ClientHandshakeOptions {
-    pub expected_server_identity: Option<latebra::signature::MlDsa87PublicKey>,
+    pub expected_server_identity: Option<MlDsa87PublicKey>,
     pub client_identity: SigningIdentity,
     pub enrollment_token: Option<String>,
 }
@@ -91,18 +91,18 @@ pub struct ClientHandshakeOptions {
 pub trait ClientTrustProvider: Send + Sync {
     fn is_trusted(
         &self,
-        public_key: &latebra::signature::MlDsa87PublicKey,
+        public_key: &MlDsa87PublicKey,
     ) -> Result<bool, HandshakeError>;
 
     fn begin_enrollment(
         &self,
-        public_key: &latebra::signature::MlDsa87PublicKey,
+        public_key: &MlDsa87PublicKey,
         session_label: &str,
     ) -> Result<(), HandshakeError>;
 
     fn try_enroll(
         &self,
-        public_key: &latebra::signature::MlDsa87PublicKey,
+        public_key: &MlDsa87PublicKey,
         token: &str,
         session_label: &str,
     ) -> Result<bool, HandshakeError>;
@@ -116,16 +116,16 @@ pub struct ServerHandshakeOptions {
     pub sandbox: SandboxPolicy,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone)]
 pub struct ClientHandshakeSummary {
-    pub server_identity: latebra::signature::MlDsa87PublicKey,
+    pub server_identity: MlDsa87PublicKey,
     pub server_sandbox: SandboxPolicy,
     pub features: HandshakeFeatures,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone)]
 pub struct ServerHandshakeSummary {
-    pub client_identity: latebra::signature::MlDsa87PublicKey,
+    pub client_identity: MlDsa87PublicKey,
     pub sandbox: SandboxPolicy,
     pub features: HandshakeFeatures,
 }
@@ -351,7 +351,7 @@ where
             .open(&self.keys.rx_key, &nonce, ciphertext, &aad, &tag)
         {
             Ok(plaintext) => plaintext,
-            Err(CryptoError::Latebra(latebra::LatebraError::VerificationFailed)) => {
+            Err(CryptoError::Aead) => {
                 self.state.last_receive_failure = ReceiveFailure::Authentication;
                 return Err(TransportError::AuthenticationFailed);
             }
@@ -526,7 +526,7 @@ pub async fn client_handshake_with_identity_handler<IO, C, F>(
 where
     IO: AsyncRead + AsyncWrite + Unpin,
     C: HandshakeCryptoProvider<Error = CryptoError>,
-    F: FnOnce(&latebra::signature::MlDsa87PublicKey) -> Result<(), HandshakeError>,
+    F: FnOnce(&MlDsa87PublicKey) -> Result<(), HandshakeError>,
 {
     let mut io = io;
     let mut transcript = Transcript::new();
@@ -554,7 +554,7 @@ where
     let server_identity_payload = expect_server_identity(server_identity_blob)?;
     let server_identity = crypto.parse_signing_public_key(&server_identity_payload.public_key)?;
     if let Some(expected_server_identity) = &options.expected_server_identity {
-        if &server_identity != expected_server_identity {
+        if server_identity.as_slice() != expected_server_identity.as_slice() {
             return Err(HandshakeError::Authentication(
                 "server identity does not match expected key",
             ));
@@ -566,7 +566,7 @@ where
     let server_kem = expect_server_kem_binding(server_kem_blob)?;
     let kem_public_key = crypto.parse_kem_public_key(&server_kem.kem_public_key)?;
     let kem_signature = crypto.parse_signature(&server_kem.signature)?;
-    crypto.verify_message(&server_identity, kem_public_key.as_bytes(), &kem_signature)?;
+    crypto.verify_message(&server_identity, kem_public_key.as_ref(), &kem_signature)?;
 
     let envelope = crypto.encapsulate(&kem_public_key)?;
     send_handshake_message(
@@ -574,7 +574,7 @@ where
         &mut transcript,
         HandshakeType::ClientKem,
         encode_client_kem(&ClientKemPayload {
-            ciphertext: envelope.ciphertext.as_bytes().to_vec(),
+            ciphertext: envelope.ciphertext.as_ref().to_vec(),
         })?,
     )
     .await?;
@@ -589,8 +589,8 @@ where
         &mut transcript,
         HandshakeType::ClientAuth,
         encode_client_auth(&ClientAuthPayload {
-            public_key: options.client_identity.public_key.as_bytes().to_vec(),
-            signature: signature.as_bytes().to_vec(),
+            public_key: options.client_identity.public_key.as_ref().to_vec(),
+            signature: signature.as_ref().to_vec(),
             enrollment_token: options.enrollment_token,
         })?,
     )
@@ -670,7 +670,7 @@ where
         &mut transcript,
         HandshakeType::ServerIdentity,
         encode_server_identity(&ServerIdentityPayload {
-            public_key: options.server_identity.public_key.as_bytes().to_vec(),
+            public_key: options.server_identity.public_key.as_ref().to_vec(),
         })?,
     )
     .await?;
@@ -678,15 +678,15 @@ where
     let kem_keypair = crypto.generate_kem_keypair()?;
     let kem_signature = crypto.sign_message(
         &options.server_identity.secret_key,
-        kem_keypair.public_key.as_bytes(),
+        kem_keypair.public_key.as_ref(),
     )?;
     send_handshake_message(
         &mut io,
         &mut transcript,
         HandshakeType::ServerKemBinding,
         encode_server_kem_binding(&ServerKemBindingPayload {
-            kem_public_key: kem_keypair.public_key.as_bytes().to_vec(),
-            signature: kem_signature.as_bytes().to_vec(),
+            kem_public_key: kem_keypair.public_key.as_ref().to_vec(),
+            signature: kem_signature.as_ref().to_vec(),
         })?,
     )
     .await?;
@@ -966,8 +966,8 @@ fn slice_to_array_16(input: &[u8]) -> Result<[u8; 16], TransportError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::crypto::LatebraCrypto;
-    use crate::protocol::{ML_DSA_87_PUBLIC_KEY_LEN, ML_KEM_1024_CIPHERTEXT_LEN};
+    use crate::crypto::DepotCrypto;
+    use crate::crypto::{ML_DSA_87_PUBLIC_KEY_LEN, ML_KEM_1024_CIPHERTEXT_LEN};
     use std::collections::{HashMap, HashSet};
     use std::sync::Mutex;
     use tokio::io::duplex;
@@ -979,9 +979,9 @@ mod tests {
     }
 
     impl TestTrustProvider {
-        fn with_trusted(public_key: &latebra::signature::MlDsa87PublicKey) -> Arc<Self> {
+        fn with_trusted(public_key: &MlDsa87PublicKey) -> Arc<Self> {
             let mut trusted = HashSet::new();
-            trusted.insert(public_key.as_bytes().to_vec());
+            trusted.insert(public_key.as_ref().to_vec());
             Arc::new(Self {
                 trusted: Mutex::new(trusted),
                 pending: Mutex::new(HashMap::new()),
@@ -990,12 +990,12 @@ mod tests {
 
         fn pending_token(
             &self,
-            public_key: &latebra::signature::MlDsa87PublicKey,
+            public_key: &MlDsa87PublicKey,
         ) -> Option<String> {
             self.pending
                 .lock()
                 .unwrap()
-                .get(public_key.as_bytes().as_slice())
+                .get(public_key.as_slice())
                 .cloned()
         }
     }
@@ -1003,34 +1003,34 @@ mod tests {
     impl ClientTrustProvider for TestTrustProvider {
         fn is_trusted(
             &self,
-            public_key: &latebra::signature::MlDsa87PublicKey,
+            public_key: &MlDsa87PublicKey,
         ) -> Result<bool, HandshakeError> {
             Ok(self
                 .trusted
                 .lock()
                 .unwrap()
-                .contains(public_key.as_bytes().as_slice()))
+                .contains(public_key.as_slice()))
         }
 
         fn begin_enrollment(
             &self,
-            public_key: &latebra::signature::MlDsa87PublicKey,
+            public_key: &MlDsa87PublicKey,
             _session_label: &str,
         ) -> Result<(), HandshakeError> {
             self.pending
                 .lock()
                 .unwrap()
-                .insert(public_key.as_bytes().to_vec(), "TOKEN123".to_owned());
+                .insert(public_key.as_ref().to_vec(), "TOKEN123".to_owned());
             Ok(())
         }
 
         fn try_enroll(
             &self,
-            public_key: &latebra::signature::MlDsa87PublicKey,
+            public_key: &MlDsa87PublicKey,
             token: &str,
             _session_label: &str,
         ) -> Result<bool, HandshakeError> {
-            let key = public_key.as_bytes().to_vec();
+            let key = public_key.as_ref().to_vec();
             let mut pending = self.pending.lock().unwrap();
             if pending.get(&key).is_some_and(|expected| expected == token) {
                 pending.remove(&key);
@@ -1043,7 +1043,7 @@ mod tests {
 
     #[tokio::test]
     async fn secure_channel_roundtrip_works() {
-        let crypto = LatebraCrypto;
+        let crypto = DepotCrypto;
         let keys = crypto
             .derive_handshake_session_keys([9u8; 32], [7u8; 64], true)
             .unwrap();
@@ -1065,7 +1065,7 @@ mod tests {
         );
         let mut server = SecureChannel::new(
             right,
-            LatebraCrypto,
+            DepotCrypto,
             inverse,
             ConnectionRole::Server,
             TransportConfig::default(),
@@ -1082,7 +1082,7 @@ mod tests {
 
     #[tokio::test]
     async fn detects_authentication_failures() {
-        let crypto = LatebraCrypto;
+        let crypto = DepotCrypto;
         let client_keys = crypto
             .derive_handshake_session_keys([1u8; 32], [2u8; 64], true)
             .unwrap();
@@ -1102,7 +1102,7 @@ mod tests {
         );
         let mut server = SecureChannel::new(
             right,
-            LatebraCrypto,
+            DepotCrypto,
             wrong_server_keys,
             ConnectionRole::Server,
             TransportConfig::default(),
@@ -1122,7 +1122,7 @@ mod tests {
 
     #[tokio::test]
     async fn full_handshake_establishes_secure_channel() {
-        let crypto = LatebraCrypto;
+        let crypto = DepotCrypto;
         let server_identity = crypto.generate_signing_identity().unwrap();
         let expected_server_identity = server_identity.public_key.clone();
         let client_identity = crypto.generate_signing_identity().unwrap();
@@ -1132,7 +1132,7 @@ mod tests {
         let server_task = tokio::spawn(async move {
             server_handshake(
                 right,
-                LatebraCrypto,
+                DepotCrypto,
                 ServerHandshakeOptions {
                     server_identity,
                     client_trust: TestTrustProvider::with_trusted(&trusted_client),
@@ -1147,7 +1147,7 @@ mod tests {
         let client_task = tokio::spawn(async move {
             client_handshake(
                 left,
-                LatebraCrypto,
+                DepotCrypto,
                 ClientHandshakeOptions {
                     expected_server_identity: Some(expected_server_identity),
                     client_identity,
@@ -1171,14 +1171,14 @@ mod tests {
         assert_eq!(frame.payload, b".");
         assert_eq!(client.summary.server_sandbox, SandboxPolicy::Enforced);
         assert_eq!(
-            server.summary.client_identity.as_bytes().len(),
+            server.summary.client_identity.as_ref().len(),
             ML_DSA_87_PUBLIC_KEY_LEN
         );
     }
 
     #[tokio::test]
     async fn full_handshake_with_client_auth_works() {
-        let crypto = LatebraCrypto;
+        let crypto = DepotCrypto;
         let server_identity = crypto.generate_signing_identity().unwrap();
         let expected_server_identity = server_identity.public_key.clone();
         let client_identity = crypto.generate_signing_identity().unwrap();
@@ -1188,7 +1188,7 @@ mod tests {
         let server_task = tokio::spawn(async move {
             server_handshake(
                 right,
-                LatebraCrypto,
+                DepotCrypto,
                 ServerHandshakeOptions {
                     server_identity,
                     client_trust: TestTrustProvider::with_trusted(&trusted_client),
@@ -1203,7 +1203,7 @@ mod tests {
         let client_task = tokio::spawn(async move {
             client_handshake(
                 left,
-                LatebraCrypto,
+                DepotCrypto,
                 ClientHandshakeOptions {
                     expected_server_identity: Some(expected_server_identity),
                     client_identity,
@@ -1219,14 +1219,14 @@ mod tests {
 
         assert_eq!(client.summary.server_sandbox, SandboxPolicy::Disabled);
         assert_eq!(
-            server.summary.client_identity.as_bytes().len(),
+            server.summary.client_identity.as_ref().len(),
             ML_DSA_87_PUBLIC_KEY_LEN
         );
     }
 
     #[tokio::test]
     async fn proposed_rekey_is_acknowledged_and_activates_new_epoch() {
-        let crypto = LatebraCrypto;
+        let crypto = DepotCrypto;
         let keys = crypto
             .derive_handshake_session_keys([9u8; 32], [7u8; 64], true)
             .unwrap();
@@ -1247,7 +1247,7 @@ mod tests {
             SecureChannel::new(left, crypto, keys, ConnectionRole::Client, config.clone());
         let mut server = SecureChannel::new(
             right,
-            LatebraCrypto,
+            DepotCrypto,
             inverse,
             ConnectionRole::Server,
             config,
@@ -1279,7 +1279,7 @@ mod tests {
 
     #[tokio::test]
     async fn idle_timeout_surfaces_as_transport_timeout() {
-        let crypto = LatebraCrypto;
+        let crypto = DepotCrypto;
         let keys = crypto
             .derive_handshake_session_keys([9u8; 32], [7u8; 64], true)
             .unwrap();
@@ -1300,7 +1300,7 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_server_identity_mismatch() {
-        let crypto = LatebraCrypto;
+        let crypto = DepotCrypto;
         let server_identity = crypto.generate_signing_identity().unwrap();
         let wrong_server_identity = crypto.generate_signing_identity().unwrap();
         let client_identity = crypto.generate_signing_identity().unwrap();
@@ -1310,7 +1310,7 @@ mod tests {
         let server_task = tokio::spawn(async move {
             server_handshake(
                 right,
-                LatebraCrypto,
+                DepotCrypto,
                 ServerHandshakeOptions {
                     server_identity,
                     client_trust: TestTrustProvider::with_trusted(&trusted_client),
@@ -1325,7 +1325,7 @@ mod tests {
         let client_task = tokio::spawn(async move {
             client_handshake(
                 left,
-                LatebraCrypto,
+                DepotCrypto,
                 ClientHandshakeOptions {
                     expected_server_identity: Some(wrong_server_identity.public_key),
                     client_identity,
@@ -1364,7 +1364,7 @@ mod tests {
 
     #[tokio::test]
     async fn unknown_client_requires_enrollment_then_accepts_token() {
-        let crypto = LatebraCrypto;
+        let crypto = DepotCrypto;
         let server_identity = crypto.generate_signing_identity().unwrap();
         let expected_server_identity = server_identity.public_key.clone();
         let client_identity = crypto.generate_signing_identity().unwrap();
@@ -1377,7 +1377,7 @@ mod tests {
         let server_task = tokio::spawn(async move {
             server_handshake(
                 right,
-                LatebraCrypto,
+                DepotCrypto,
                 ServerHandshakeOptions {
                     server_identity,
                     client_trust: server_trust,
@@ -1392,7 +1392,7 @@ mod tests {
         let client_task = tokio::spawn(async move {
             client_handshake(
                 left,
-                LatebraCrypto,
+                DepotCrypto,
                 ClientHandshakeOptions {
                     expected_server_identity: Some(expected_server_identity),
                     client_identity,
@@ -1423,7 +1423,7 @@ mod tests {
         let server_task = tokio::spawn(async move {
             server_handshake(
                 right,
-                LatebraCrypto,
+                DepotCrypto,
                 ServerHandshakeOptions {
                     server_identity,
                     client_trust: server_trust,
@@ -1438,7 +1438,7 @@ mod tests {
         let client_task = tokio::spawn(async move {
             client_handshake(
                 left,
-                LatebraCrypto,
+                DepotCrypto,
                 ClientHandshakeOptions {
                     expected_server_identity: Some(expected_server_identity),
                     client_identity: retry_client_identity,
@@ -1453,7 +1453,7 @@ mod tests {
         let client = client_task.await.unwrap().unwrap();
         assert_eq!(client.summary.server_sandbox, SandboxPolicy::Enforced);
         assert_eq!(
-            server.summary.client_identity.as_bytes().len(),
+            server.summary.client_identity.as_ref().len(),
             ML_DSA_87_PUBLIC_KEY_LEN
         );
     }

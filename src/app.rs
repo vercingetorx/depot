@@ -5,8 +5,7 @@ use crate::core::{
     SandboxPolicy, ServeOptions, ServerRoot, TransferProgress, TransferProgressAction,
     classify_outcome_severity,
 };
-use crate::crypto::latebra::hash::Blake3;
-use crate::crypto::{CryptoError, LatebraCrypto, SigningIdentity, latebra};
+use crate::crypto::{Blake3, CryptoError, DepotCrypto, MlDsa87PublicKey, SigningIdentity};
 use crate::fs::{ensure_server_root, resolve_remote_path};
 use crate::protocol::{
     FileMetadata, ListEntry, PathOpenPayload, RecordType, UploadOpenPayload, decode_error_payload,
@@ -45,18 +44,18 @@ pub struct ServerRuntimeOptions {
     pub client_trust: Arc<dyn ClientTrustProvider>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone)]
 pub struct ClientRuntimeOptions {
-    pub expected_server_identity: Option<latebra::signature::MlDsa87PublicKey>,
+    pub expected_server_identity: Option<MlDsa87PublicKey>,
     pub client_identity: SigningIdentity,
     pub tofu_pin_path: Option<PathBuf>,
     pub enrollment_token: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone)]
 pub struct ClientResponse<T> {
     pub value: T,
-    pub server_identity: latebra::signature::MlDsa87PublicKey,
+    pub server_identity: MlDsa87PublicKey,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -206,7 +205,7 @@ impl App {
 
     pub fn default_client_runtime_options(
         &self,
-        expected_server_identity: Option<latebra::signature::MlDsa87PublicKey>,
+        expected_server_identity: Option<MlDsa87PublicKey>,
         client_identity: SigningIdentity,
         tofu_pin_path: Option<PathBuf>,
         enrollment_token: Option<String>,
@@ -236,7 +235,8 @@ impl App {
         remote_path: RemotePath,
         options: ClientRuntimeOptions,
     ) -> Result<ClientResponse<Vec<ListEntry>>, AppError> {
-        let (mut channel, server_identity) = self.establish_client_channel(io, options).await?;
+        let (mut channel, server_identity): (SecureChannel<IO, DepotCrypto>, MlDsa87PublicKey) =
+            self.establish_client_channel(io, options).await?;
         channel
             .send_record(RecordType::ListOpen, &encode_path_param(&remote_path))
             .await?;
@@ -486,7 +486,7 @@ impl App {
     ) -> Result<(), AppError> {
         let handshake = server_handshake(
             io,
-            LatebraCrypto,
+            DepotCrypto,
             ServerHandshakeOptions {
                 server_identity: options.identity.clone(),
                 client_trust: options.client_trust.clone(),
@@ -524,28 +524,28 @@ impl App {
         options: ClientRuntimeOptions,
     ) -> Result<
         (
-            SecureChannel<IO, LatebraCrypto>,
-            latebra::signature::MlDsa87PublicKey,
+            SecureChannel<IO, DepotCrypto>,
+            MlDsa87PublicKey,
         ),
         AppError,
     > {
         let pin_path = options.tofu_pin_path.clone();
         let handshake = client_handshake_with_identity_handler(
             io,
-            LatebraCrypto,
+            DepotCrypto,
             ClientHandshakeOptions {
                 expected_server_identity: options.expected_server_identity,
                 client_identity: options.client_identity,
                 enrollment_token: options.enrollment_token,
             },
             TransportConfig::default(),
-            move |server_identity| {
+            move |server_identity: &MlDsa87PublicKey| {
                 if let Some(pin_path) = &pin_path {
                     if !pin_path.exists() {
                         if let Some(parent) = pin_path.parent() {
                             std::fs::create_dir_all(parent).map_err(HandshakeError::Io)?;
                         }
-                        std::fs::write(pin_path, server_identity.as_bytes())
+                        std::fs::write(pin_path, server_identity.as_ref())
                             .map_err(HandshakeError::Io)?;
                     }
                 }
@@ -558,7 +558,7 @@ impl App {
 
     async fn run_server_loop<IO: AsyncRead + AsyncWrite + Unpin>(
         &self,
-        mut channel: SecureChannel<IO, LatebraCrypto>,
+        mut channel: SecureChannel<IO, DepotCrypto>,
         options: &ServerRuntimeOptions,
         session_id: &str,
     ) -> Result<(), AppError> {
@@ -676,7 +676,7 @@ impl App {
 
     async fn handle_list_request<IO: AsyncRead + AsyncWrite + Unpin>(
         &self,
-        channel: &mut SecureChannel<IO, LatebraCrypto>,
+        channel: &mut SecureChannel<IO, DepotCrypto>,
         payload: &[u8],
         options: &ServerRuntimeOptions,
         session_id: &str,
@@ -771,7 +771,7 @@ impl App {
 
     async fn handle_upload_open<IO: AsyncRead + AsyncWrite + Unpin>(
         &self,
-        channel: &mut SecureChannel<IO, LatebraCrypto>,
+        channel: &mut SecureChannel<IO, DepotCrypto>,
         payload: &[u8],
         options: &ServerRuntimeOptions,
         session_id: &str,
@@ -849,7 +849,7 @@ impl App {
 
     async fn handle_upload_commit<IO: AsyncRead + AsyncWrite + Unpin>(
         &self,
-        channel: &mut SecureChannel<IO, LatebraCrypto>,
+        channel: &mut SecureChannel<IO, DepotCrypto>,
         mut state: UploadState,
         payload: &[u8],
         options: &ServerRuntimeOptions,
@@ -914,7 +914,7 @@ impl App {
 
     async fn upload_job<IO, PF>(
         &self,
-        channel: &mut SecureChannel<IO, LatebraCrypto>,
+        channel: &mut SecureChannel<IO, DepotCrypto>,
         job: &ExportJob,
         on_progress: &mut PF,
     ) -> Result<u64, AppError>
@@ -1003,7 +1003,7 @@ impl App {
 
     async fn download_source<IO, OF, PF>(
         &self,
-        channel: &mut SecureChannel<IO, LatebraCrypto>,
+        channel: &mut SecureChannel<IO, DepotCrypto>,
         source: &RemotePath,
         destination_root: &Path,
         include_top: bool,
@@ -1164,7 +1164,7 @@ impl App {
 
     async fn receive_download_file<IO, PF>(
         &self,
-        channel: &mut SecureChannel<IO, LatebraCrypto>,
+        channel: &mut SecureChannel<IO, DepotCrypto>,
         mut state: DownloadState,
         on_progress: &mut PF,
     ) -> Result<(u64, PathBuf), AppError>
@@ -1261,7 +1261,7 @@ impl App {
 
     async fn handle_download_request<IO: AsyncRead + AsyncWrite + Unpin>(
         &self,
-        channel: &mut SecureChannel<IO, LatebraCrypto>,
+        channel: &mut SecureChannel<IO, DepotCrypto>,
         payload: &[u8],
         options: &ServerRuntimeOptions,
         session_id: &str,
@@ -1360,7 +1360,7 @@ impl App {
 
     async fn stream_download_item<IO: AsyncRead + AsyncWrite + Unpin>(
         &self,
-        channel: &mut SecureChannel<IO, LatebraCrypto>,
+        channel: &mut SecureChannel<IO, DepotCrypto>,
         item: &DownloadItem,
         session_id: &str,
     ) -> Result<(), AppError> {
@@ -1438,7 +1438,7 @@ impl App {
 
     async fn send_protocol_error<IO: AsyncRead + AsyncWrite + Unpin>(
         &self,
-        channel: &mut SecureChannel<IO, LatebraCrypto>,
+        channel: &mut SecureChannel<IO, DepotCrypto>,
         message: &str,
     ) -> Result<(), AppError> {
         channel
@@ -1455,7 +1455,7 @@ impl App {
 
     async fn recv_client_record<IO: AsyncRead + AsyncWrite + Unpin>(
         &self,
-        channel: &mut SecureChannel<IO, LatebraCrypto>,
+        channel: &mut SecureChannel<IO, DepotCrypto>,
     ) -> Result<crate::protocol::Frame, AppError> {
         loop {
             let frame = channel.recv_record().await?;
@@ -1909,9 +1909,9 @@ mod tests {
     }
 
     impl TestTrustStore {
-        fn with_trusted(public_key: &latebra::signature::MlDsa87PublicKey) -> Arc<Self> {
+        fn with_trusted(public_key: &MlDsa87PublicKey) -> Arc<Self> {
             let mut trusted = HashSet::new();
-            trusted.insert(public_key.as_bytes().to_vec());
+            trusted.insert(public_key.as_ref().to_vec());
             Arc::new(Self {
                 trusted: Mutex::new(trusted),
             })
@@ -1921,18 +1921,18 @@ mod tests {
     impl ClientTrustProvider for TestTrustStore {
         fn is_trusted(
             &self,
-            public_key: &latebra::signature::MlDsa87PublicKey,
+            public_key: &MlDsa87PublicKey,
         ) -> Result<bool, HandshakeError> {
             Ok(self
                 .trusted
                 .lock()
                 .unwrap()
-                .contains(public_key.as_bytes().as_slice()))
+                .contains(public_key.as_slice()))
         }
 
         fn begin_enrollment(
             &self,
-            _public_key: &latebra::signature::MlDsa87PublicKey,
+            _public_key: &MlDsa87PublicKey,
             _session_label: &str,
         ) -> Result<(), HandshakeError> {
             Err(HandshakeError::BadState(
@@ -1942,7 +1942,7 @@ mod tests {
 
         fn try_enroll(
             &self,
-            _public_key: &latebra::signature::MlDsa87PublicKey,
+            _public_key: &MlDsa87PublicKey,
             _token: &str,
             _session_label: &str,
         ) -> Result<bool, HandshakeError> {
@@ -1961,9 +1961,9 @@ mod tests {
 
         let app = App::new(Config::default());
         let root = app.canonical_server_root(root_dir.path()).unwrap();
-        let identity = LatebraCrypto.generate_signing_identity().unwrap();
+        let identity = DepotCrypto.generate_signing_identity().unwrap();
         let expected_server_identity = identity.public_key.clone();
-        let client_identity = LatebraCrypto.generate_signing_identity().unwrap();
+        let client_identity = DepotCrypto.generate_signing_identity().unwrap();
 
         let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -2019,9 +2019,9 @@ mod tests {
 
         let app = App::new(Config::default());
         let root = app.canonical_server_root(root_dir.path()).unwrap();
-        let identity = LatebraCrypto.generate_signing_identity().unwrap();
+        let identity = DepotCrypto.generate_signing_identity().unwrap();
         let expected_server_identity = identity.public_key.clone();
-        let client_identity = LatebraCrypto.generate_signing_identity().unwrap();
+        let client_identity = DepotCrypto.generate_signing_identity().unwrap();
 
         let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -2076,9 +2076,9 @@ mod tests {
 
         let app = App::new(Config::default());
         let root = app.canonical_server_root(root_dir.path()).unwrap();
-        let identity = LatebraCrypto.generate_signing_identity().unwrap();
+        let identity = DepotCrypto.generate_signing_identity().unwrap();
         let expected_server_identity = identity.public_key.clone();
-        let client_identity = LatebraCrypto.generate_signing_identity().unwrap();
+        let client_identity = DepotCrypto.generate_signing_identity().unwrap();
 
         let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -2141,9 +2141,9 @@ mod tests {
 
         let app = App::new(Config::default());
         let root = app.canonical_server_root(root_dir.path()).unwrap();
-        let identity = LatebraCrypto.generate_signing_identity().unwrap();
+        let identity = DepotCrypto.generate_signing_identity().unwrap();
         let expected_server_identity = identity.public_key.clone();
-        let client_identity = LatebraCrypto.generate_signing_identity().unwrap();
+        let client_identity = DepotCrypto.generate_signing_identity().unwrap();
 
         let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -2206,9 +2206,9 @@ mod tests {
 
         let app = App::new(Config::default());
         let root = app.canonical_server_root(root_dir.path()).unwrap();
-        let identity = LatebraCrypto.generate_signing_identity().unwrap();
+        let identity = DepotCrypto.generate_signing_identity().unwrap();
         let expected_server_identity = identity.public_key.clone();
-        let client_identity = LatebraCrypto.generate_signing_identity().unwrap();
+        let client_identity = DepotCrypto.generate_signing_identity().unwrap();
 
         let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -2271,9 +2271,9 @@ mod tests {
 
         let app = App::new(Config::default());
         let root = app.canonical_server_root(root_dir.path()).unwrap();
-        let identity = LatebraCrypto.generate_signing_identity().unwrap();
+        let identity = DepotCrypto.generate_signing_identity().unwrap();
         let expected_server_identity = identity.public_key.clone();
-        let client_identity = LatebraCrypto.generate_signing_identity().unwrap();
+        let client_identity = DepotCrypto.generate_signing_identity().unwrap();
 
         let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -2339,9 +2339,9 @@ mod tests {
 
         let app = App::new(Config::default());
         let root = app.canonical_server_root(root_dir.path()).unwrap();
-        let identity = LatebraCrypto.generate_signing_identity().unwrap();
+        let identity = DepotCrypto.generate_signing_identity().unwrap();
         let expected_server_identity = identity.public_key.clone();
-        let client_identity = LatebraCrypto.generate_signing_identity().unwrap();
+        let client_identity = DepotCrypto.generate_signing_identity().unwrap();
 
         let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -2401,9 +2401,9 @@ mod tests {
 
         let app = App::new(Config::default());
         let root = app.canonical_server_root(root_dir.path()).unwrap();
-        let identity = LatebraCrypto.generate_signing_identity().unwrap();
+        let identity = DepotCrypto.generate_signing_identity().unwrap();
         let expected_server_identity = identity.public_key.clone();
-        let client_identity = LatebraCrypto.generate_signing_identity().unwrap();
+        let client_identity = DepotCrypto.generate_signing_identity().unwrap();
 
         let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -2464,9 +2464,9 @@ mod tests {
 
         let app = App::new(Config::default());
         let root = app.canonical_server_root(root_dir.path()).unwrap();
-        let identity = LatebraCrypto.generate_signing_identity().unwrap();
+        let identity = DepotCrypto.generate_signing_identity().unwrap();
         let expected_server_identity = identity.public_key.clone();
-        let client_identity = LatebraCrypto.generate_signing_identity().unwrap();
+        let client_identity = DepotCrypto.generate_signing_identity().unwrap();
 
         let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
         let addr = listener.local_addr().unwrap();

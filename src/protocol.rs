@@ -1,15 +1,15 @@
 use bytes::{BufMut, BytesMut};
 use crate::core::{ErrorCode, PortablePermission, PortablePermissions, RemotePath};
+use crate::crypto::{
+    ML_DSA_87_PUBLIC_KEY_LEN, ML_DSA_87_SIGNATURE_LEN, ML_KEM_1024_CIPHERTEXT_LEN,
+    ML_KEM_1024_PUBLIC_KEY_LEN,
+};
 use std::convert::TryFrom;
 
 pub const MAX_RECORD_BODY_LEN: usize = 16 * 1024 * 1024;
 pub const MAX_HANDSHAKE_BLOB_LEN: usize = 1024 * 1024;
 pub const PROTOCOL_VERSION: u8 = 3;
 pub const FEATURE_DOWNLOAD_ACK_V1: u64 = 1 << 0;
-pub const ML_DSA_87_PUBLIC_KEY_LEN: usize = 2592;
-pub const ML_DSA_87_SIGNATURE_LEN: usize = 4627;
-pub const ML_KEM_1024_PUBLIC_KEY_LEN: usize = 1568;
-pub const ML_KEM_1024_CIPHERTEXT_LEN: usize = 1568;
 pub const MAX_ENROLLMENT_TOKEN_LEN: usize = 64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

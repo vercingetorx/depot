@@ -5,8 +5,9 @@ use crate::core::{
     BatchReport, Command, Endpoint, ExportPlan, ImportPlan, ListPlan, RemotePath, SandboxPolicy,
     ServeOptions,
 };
-use crate::crypto::latebra::signature::MlDsa87PublicKey;
-use crate::crypto::{CryptoError, HandshakeCryptoProvider, LatebraCrypto, SigningIdentity};
+use crate::crypto::{
+    Blake3, CryptoError, DepotCrypto, HandshakeCryptoProvider, MlDsa87PublicKey, SigningIdentity,
+};
 use crate::transport::{ClientTrustProvider, HandshakeError};
 use crate::ui::{
     Audience, ClientConsole, render_batch_result, render_error, render_handshake_error,
@@ -215,7 +216,7 @@ impl ClientTrustStore {
         let trust_dir = config_dir().join("trust").join("clients");
         std::fs::create_dir_all(&trust_dir)?;
 
-        let crypto = LatebraCrypto;
+        let crypto = DepotCrypto;
         let mut trusted = HashSet::new();
         let mut entries = std::fs::read_dir(&trust_dir)?.collect::<Result<Vec<_>, _>>()?;
         entries.sort_by_key(|entry| entry.path());
@@ -226,7 +227,7 @@ impl ClientTrustStore {
             }
             let bytes = std::fs::read(&path)?;
             let key = crypto.parse_signing_public_key(&bytes)?;
-            trusted.insert(key.as_bytes().to_vec());
+            trusted.insert(key.as_ref().to_vec());
         }
 
         Ok(Arc::new(Self {
@@ -244,10 +245,8 @@ impl ClientTrustStore {
     }
 
     fn fingerprint(public_key: &MlDsa87PublicKey) -> String {
-        use crate::crypto::latebra::hash::Blake3;
-
         let mut hash = Blake3::new();
-        hash.update(public_key.as_bytes());
+        hash.update(public_key.as_ref());
         let digest = hash.finalize();
         let mut fingerprint = String::with_capacity(16);
         for byte in &digest.as_bytes()[..8] {
@@ -281,7 +280,7 @@ impl ClientTrustProvider for ClientTrustStore {
             .state
             .lock()
             .map_err(|_| HandshakeError::BadState("client trust store poisoned"))?;
-        Ok(state.trusted.contains(public_key.as_bytes().as_slice()))
+        Ok(state.trusted.contains(public_key.as_slice()))
     }
 
     fn begin_enrollment(
@@ -295,12 +294,12 @@ impl ClientTrustProvider for ClientTrustStore {
             .lock()
             .map_err(|_| HandshakeError::BadState("client trust store poisoned"))?;
         Self::cleanup_expired(&mut state);
-        let token = match state.pending.get(public_key.as_bytes().as_slice()) {
+        let token = match state.pending.get(public_key.as_slice()) {
             Some(pending) => pending.token.clone(),
             None => {
                 let token = Self::new_token()?;
                 state.pending.insert(
-                    public_key.as_bytes().to_vec(),
+                    public_key.as_ref().to_vec(),
                     PendingEnrollment {
                         token: token.clone(),
                         expires_at: Instant::now() + Self::ENROLLMENT_TTL,
@@ -326,7 +325,7 @@ impl ClientTrustProvider for ClientTrustStore {
         token: &str,
         session_label: &str,
     ) -> Result<bool, HandshakeError> {
-        let key_bytes = public_key.as_bytes().to_vec();
+        let key_bytes = public_key.as_ref().to_vec();
         let mut state = self
             .state
             .lock()
@@ -673,7 +672,7 @@ fn resolve_server_passphrase(args: &ServeArgs) -> Result<Option<String>, RunErro
 }
 
 fn ensure_server_identity(passphrase: Option<&str>) -> Result<SigningIdentity, RunError> {
-    let crypto = LatebraCrypto;
+    let crypto = DepotCrypto;
     let id_dir = config_dir().join("id");
     std::fs::create_dir_all(&id_dir)?;
     let public_path = id_dir.join("server_dilithium.pk");
@@ -696,14 +695,14 @@ fn ensure_server_identity(passphrase: Option<&str>) -> Result<SigningIdentity, R
 
     let passphrase = passphrase.ok_or(RunError::MissingServerPassphrase)?;
     let identity = crypto.generate_signing_identity()?;
-    std::fs::write(&public_path, identity.public_key.as_bytes())?;
-    let encrypted = crypto.encrypt_secret(identity.secret_key.as_bytes(), passphrase.as_bytes())?;
+    std::fs::write(&public_path, identity.public_key.as_ref())?;
+    let encrypted = crypto.encrypt_secret(identity.secret_key.as_ref(), passphrase.as_bytes())?;
     std::fs::write(&secret_path, encrypted.as_bytes())?;
     Ok(identity)
 }
 
 fn ensure_client_identity() -> Result<SigningIdentity, RunError> {
-    let crypto = LatebraCrypto;
+    let crypto = DepotCrypto;
     let id_dir = config_dir().join("id");
     std::fs::create_dir_all(&id_dir)?;
     let public_path = id_dir.join("client_dilithium.pk");
@@ -719,8 +718,8 @@ fn ensure_client_identity() -> Result<SigningIdentity, RunError> {
     }
 
     let identity = crypto.generate_signing_identity()?;
-    std::fs::write(&public_path, identity.public_key.as_bytes())?;
-    std::fs::write(&secret_path, identity.secret_key.as_bytes())?;
+    std::fs::write(&public_path, identity.public_key.as_ref())?;
+    std::fs::write(&secret_path, identity.secret_key.as_ref())?;
     Ok(identity)
 }
 
@@ -733,7 +732,7 @@ fn load_pinned_server_identity(remote_id: &str) -> Result<Option<MlDsa87PublicKe
     if !path.exists() {
         return Ok(None);
     }
-    let crypto = LatebraCrypto;
+    let crypto = DepotCrypto;
     let bytes = std::fs::read(path)?;
     Ok(Some(crypto.parse_signing_public_key(&bytes)?))
 }

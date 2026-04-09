@@ -1,19 +1,31 @@
-use latebra::aead::{
-    SealedXChaCha20Poly1305Message, XChaCha20Poly1305Tag, open_with_xchacha20_poly1305,
-    seal_with_xchacha20_poly1305,
+use argon2::{Algorithm as Argon2Algorithm, Argon2, Params as Argon2Params, Version as Argon2Version};
+use chacha20poly1305::{
+    Key, Tag, XChaCha20Poly1305, XNonce,
+    aead::{AeadInPlace, KeyInit},
 };
-use latebra::hash::Blake3;
-use latebra::kdf::{Argon2, Argon2Mode, Argon2Parameters};
-use latebra::kem::{
-    MlKem1024, MlKem1024Ciphertext, MlKem1024Envelope, MlKem1024KeyPair, MlKem1024PublicKey,
-    MlKem1024SecretKey, generate_ml_kem_1024_keypair,
+use libcrux_ml_dsa::{
+    KEY_GENERATION_RANDOMNESS_SIZE as ML_DSA_KEY_GENERATION_RANDOMNESS_SIZE,
+    SIGNING_RANDOMNESS_SIZE as ML_DSA_SIGNING_RANDOMNESS_SIZE, SigningError, VerificationError,
+    ml_dsa_87::{
+        MLDSA87KeyPair, MLDSA87Signature, MLDSA87SigningKey, MLDSA87VerificationKey,
+        generate_key_pair as generate_ml_dsa_87_key_pair, sign as sign_ml_dsa_87,
+        verify as verify_ml_dsa_87,
+    },
 };
-use latebra::signature::{
-    MlDsa87, MlDsa87KeyPair, MlDsa87PublicKey, MlDsa87SecretKey, MlDsa87Signature,
-    generate_ml_dsa_87_keypair,
+use libcrux_ml_kem::{
+    KEY_GENERATION_SEED_SIZE as ML_KEM_1024_KEY_GENERATION_SEED_SIZE,
+    SHARED_SECRET_SIZE as ML_KEM_1024_SHARED_SECRET_SIZE,
+    mlkem1024::{
+        MlKem1024Ciphertext, MlKem1024KeyPair, MlKem1024PrivateKey as MlKem1024SecretKey,
+        MlKem1024PublicKey, decapsulate as decapsulate_ml_kem_1024,
+        encapsulate as encapsulate_ml_kem_1024, generate_key_pair as generate_ml_kem_1024_key_pair,
+    },
 };
 
-pub use latebra;
+pub use blake3::Hasher as Blake3;
+pub type MlDsa87PublicKey = MLDSA87VerificationKey;
+pub type MlDsa87SecretKey = MLDSA87SigningKey;
+pub type MlDsa87Signature = MLDSA87Signature;
 
 const TRAFFIC_SECRET_INFO: &[u8] = b"depot/traffic-secret";
 const C2S_KEY_INFO: &[u8] = b"depot/session/c2s/key";
@@ -32,6 +44,12 @@ const ARGON2_LIVE_LANES: u32 = 1;
 const ARGON2_DPK1_TIME_COST: u32 = 4;
 const ARGON2_DPK1_MEMORY_KIB: u32 = 262144;
 const ARGON2_DPK1_LANES: u32 = 1;
+
+pub const ML_DSA_87_SECRET_KEY_LEN: usize = MlDsa87SecretKey::len();
+pub const ML_DSA_87_PUBLIC_KEY_LEN: usize = MlDsa87PublicKey::len();
+pub const ML_DSA_87_SIGNATURE_LEN: usize = MlDsa87Signature::len();
+pub const ML_KEM_1024_PUBLIC_KEY_LEN: usize = MlKem1024PublicKey::len();
+pub const ML_KEM_1024_CIPHERTEXT_LEN: usize = MlKem1024Ciphertext::len();
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionKeys {
@@ -72,7 +90,7 @@ impl Transcript {
         let mut hasher = Blake3::new();
         hasher.update(&self.bytes);
         let mut output = [0u8; 64];
-        hasher.finalize_xof().squeeze_into(&mut output);
+        hasher.finalize_xof().fill(&mut output);
         Ok(output)
     }
 
@@ -87,19 +105,37 @@ impl Default for Transcript {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone)]
 pub struct SigningIdentity {
     pub public_key: MlDsa87PublicKey,
     pub secret_key: MlDsa87SecretKey,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+impl std::fmt::Debug for SigningIdentity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SigningIdentity")
+            .field("public_key_len", &self.public_key.as_ref().len())
+            .field("secret_key_len", &self.secret_key.as_ref().len())
+            .finish()
+    }
+}
+
+impl PartialEq for SigningIdentity {
+    fn eq(&self, other: &Self) -> bool {
+        self.public_key.as_ref() == other.public_key.as_ref()
+            && self.secret_key.as_ref() == other.secret_key.as_ref()
+    }
+}
+
+impl Eq for SigningIdentity {}
+
+#[derive(Clone)]
 pub struct KemKeypair {
     pub public_key: MlKem1024PublicKey,
     pub secret_key: MlKem1024SecretKey,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone)]
 pub struct KemEnvelope {
     pub ciphertext: MlKem1024Ciphertext,
     pub shared_secret: [u8; 32],
@@ -122,7 +158,10 @@ impl EncryptedSecret {
 
 #[derive(Debug)]
 pub enum CryptoError {
-    Latebra(latebra::LatebraError),
+    MlDsaSigning(SigningError),
+    MlDsaVerification(VerificationError),
+    Argon2(argon2::Error),
+    Aead,
     InvalidLength { expected: usize, actual: usize },
     InvalidEncryptedSecret,
     Random(std::io::Error),
@@ -131,7 +170,10 @@ pub enum CryptoError {
 impl std::fmt::Display for CryptoError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Latebra(error) => write!(f, "{error}"),
+            Self::MlDsaSigning(error) => write!(f, "{error:?}"),
+            Self::MlDsaVerification(error) => write!(f, "{error:?}"),
+            Self::Argon2(error) => write!(f, "{error}"),
+            Self::Aead => f.write_str("authenticated encryption failed"),
             Self::InvalidLength { expected, actual } => {
                 write!(f, "invalid length: expected {expected}, got {actual}")
             }
@@ -143,9 +185,9 @@ impl std::fmt::Display for CryptoError {
 
 impl std::error::Error for CryptoError {}
 
-impl From<latebra::LatebraError> for CryptoError {
-    fn from(value: latebra::LatebraError) -> Self {
-        Self::Latebra(value)
+impl From<argon2::Error> for CryptoError {
+    fn from(value: argon2::Error) -> Self {
+        Self::Argon2(value)
     }
 }
 
@@ -180,10 +222,6 @@ pub trait CryptoProvider {
 pub trait HandshakeCryptoProvider: CryptoProvider<Error = CryptoError> {
     fn parse_signing_secret_key(&self, bytes: &[u8]) -> Result<MlDsa87SecretKey, CryptoError>;
     fn parse_signing_public_key(&self, bytes: &[u8]) -> Result<MlDsa87PublicKey, CryptoError>;
-    fn derive_signing_public_key(
-        &self,
-        secret_key: &MlDsa87SecretKey,
-    ) -> Result<MlDsa87PublicKey, CryptoError>;
     fn parse_signature(&self, bytes: &[u8]) -> Result<MlDsa87Signature, CryptoError>;
     fn parse_kem_public_key(&self, bytes: &[u8]) -> Result<MlKem1024PublicKey, CryptoError>;
     fn parse_kem_ciphertext(&self, bytes: &[u8]) -> Result<MlKem1024Ciphertext, CryptoError>;
@@ -221,37 +259,33 @@ pub trait HandshakeCryptoProvider: CryptoProvider<Error = CryptoError> {
 }
 
 #[derive(Debug, Clone, Copy, Default)]
-pub struct LatebraCrypto;
+pub struct DepotCrypto;
 
-impl LatebraCrypto {
+impl DepotCrypto {
     pub fn parse_signing_secret_key(&self, bytes: &[u8]) -> Result<MlDsa87SecretKey, CryptoError> {
-        let bytes = to_array_4896(bytes)?;
-        Ok(MlDsa87SecretKey::new(bytes))
+        Ok(MlDsa87SecretKey::new(to_array_4896(bytes)?))
     }
 
     pub fn parse_signing_public_key(&self, bytes: &[u8]) -> Result<MlDsa87PublicKey, CryptoError> {
-        let bytes = to_array_2592(bytes)?;
-        Ok(MlDsa87PublicKey::new(bytes))
-    }
-
-    pub fn derive_signing_public_key(
-        &self,
-        secret_key: &MlDsa87SecretKey,
-    ) -> Result<MlDsa87PublicKey, CryptoError> {
-        MlDsa87::derive_public_key(secret_key.clone()).map_err(CryptoError::Latebra)
+        Ok(MlDsa87PublicKey::new(to_array_2592(bytes)?))
     }
 
     pub fn parse_signature(&self, bytes: &[u8]) -> Result<MlDsa87Signature, CryptoError> {
-        let bytes = to_array_4627(bytes)?;
-        Ok(MlDsa87Signature::new(bytes))
+        Ok(MlDsa87Signature::new(to_array_4627(bytes)?))
     }
 
     pub fn parse_kem_public_key(&self, bytes: &[u8]) -> Result<MlKem1024PublicKey, CryptoError> {
-        MlKem1024PublicKey::from_slice(bytes).map_err(CryptoError::Latebra)
+        bytes.try_into().map_err(|_| CryptoError::InvalidLength {
+            expected: ML_KEM_1024_PUBLIC_KEY_LEN,
+            actual: bytes.len(),
+        })
     }
 
     pub fn parse_kem_ciphertext(&self, bytes: &[u8]) -> Result<MlKem1024Ciphertext, CryptoError> {
-        MlKem1024Ciphertext::from_slice(bytes).map_err(CryptoError::Latebra)
+        bytes.try_into().map_err(|_| CryptoError::InvalidLength {
+            expected: ML_KEM_1024_CIPHERTEXT_LEN,
+            actual: bytes.len(),
+        })
     }
 
     pub fn encrypt_secret(
@@ -264,8 +298,11 @@ impl LatebraCrypto {
         let mut nonce = [0u8; DPK1_NONCE_LEN];
         fill_random_bytes(&mut nonce)?;
         let key = dpk1_key(passphrase, &salt)?;
-        let sealed = seal_with_xchacha20_poly1305(&key, &nonce, DPK1_MAGIC, plaintext)
-            .map_err(CryptoError::Latebra)?;
+        let cipher = XChaCha20Poly1305::new(Key::from_slice(&key));
+        let mut ciphertext = plaintext.to_vec();
+        let tag = cipher
+            .encrypt_in_place_detached(XNonce::from_slice(&nonce), DPK1_MAGIC, &mut ciphertext)
+            .map_err(|_| CryptoError::Aead)?;
 
         let mut bytes = Vec::with_capacity(
             4 + 4 + DPK1_SALT_LEN + DPK1_NONCE_LEN + plaintext.len() + DPK1_TAG_LEN,
@@ -274,8 +311,8 @@ impl LatebraCrypto {
         bytes.extend_from_slice(&(plaintext.len() as u32).to_le_bytes());
         bytes.extend_from_slice(&salt);
         bytes.extend_from_slice(&nonce);
-        bytes.extend_from_slice(&sealed.ciphertext);
-        bytes.extend_from_slice(sealed.tag.as_bytes());
+        bytes.extend_from_slice(&ciphertext);
+        bytes.extend_from_slice(tag.as_slice());
         Ok(EncryptedSecret { bytes })
     }
 
@@ -310,34 +347,29 @@ impl LatebraCrypto {
         let nonce: [u8; DPK1_NONCE_LEN] = encrypted[nonce_start..ciphertext_start]
             .try_into()
             .map_err(|_| CryptoError::InvalidEncryptedSecret)?;
+        let tag = Tag::from_slice(&encrypted[ciphertext_end..tag_end]);
+        let mut plaintext = encrypted[ciphertext_start..ciphertext_end].to_vec();
         let key = dpk1_key(passphrase, &salt)?;
-        let sealed = SealedXChaCha20Poly1305Message {
-            ciphertext: encrypted[ciphertext_start..ciphertext_end].to_vec(),
-            tag: XChaCha20Poly1305Tag::new(
-                encrypted[ciphertext_end..tag_end]
-                    .try_into()
-                    .map_err(|_| CryptoError::InvalidEncryptedSecret)?,
-            ),
-        };
-        open_with_xchacha20_poly1305(&key, &nonce, DPK1_MAGIC, &sealed)
-            .map_err(CryptoError::Latebra)
+        let cipher = XChaCha20Poly1305::new(Key::from_slice(&key));
+        cipher
+            .decrypt_in_place_detached(
+                XNonce::from_slice(&nonce),
+                DPK1_MAGIC,
+                &mut plaintext,
+                tag,
+            )
+            .map_err(|_| CryptoError::Aead)?;
+        Ok(plaintext)
     }
 }
 
-impl HandshakeCryptoProvider for LatebraCrypto {
+impl HandshakeCryptoProvider for DepotCrypto {
     fn parse_signing_secret_key(&self, bytes: &[u8]) -> Result<MlDsa87SecretKey, CryptoError> {
         Self::parse_signing_secret_key(self, bytes)
     }
 
     fn parse_signing_public_key(&self, bytes: &[u8]) -> Result<MlDsa87PublicKey, CryptoError> {
         Self::parse_signing_public_key(self, bytes)
-    }
-
-    fn derive_signing_public_key(
-        &self,
-        secret_key: &MlDsa87SecretKey,
-    ) -> Result<MlDsa87PublicKey, CryptoError> {
-        Self::derive_signing_public_key(self, secret_key)
     }
 
     fn parse_signature(&self, bytes: &[u8]) -> Result<MlDsa87Signature, CryptoError> {
@@ -353,24 +385,25 @@ impl HandshakeCryptoProvider for LatebraCrypto {
     }
 
     fn generate_signing_identity(&self) -> Result<SigningIdentity, CryptoError> {
-        let MlDsa87KeyPair {
-            public_key,
-            secret_key,
-        } = generate_ml_dsa_87_keypair().map_err(CryptoError::Latebra)?;
+        let mut randomness = [0u8; ML_DSA_KEY_GENERATION_RANDOMNESS_SIZE];
+        fill_random_bytes(&mut randomness)?;
+        let MLDSA87KeyPair {
+            verification_key,
+            signing_key,
+        } = generate_ml_dsa_87_key_pair(randomness);
         Ok(SigningIdentity {
-            public_key,
-            secret_key,
+            public_key: verification_key,
+            secret_key: signing_key,
         })
     }
 
     fn generate_kem_keypair(&self) -> Result<KemKeypair, CryptoError> {
-        let MlKem1024KeyPair {
-            public_key,
-            secret_key,
-        } = generate_ml_kem_1024_keypair().map_err(CryptoError::Latebra)?;
+        let mut randomness = [0u8; ML_KEM_1024_KEY_GENERATION_SEED_SIZE];
+        fill_random_bytes(&mut randomness)?;
+        let keypair: MlKem1024KeyPair = generate_ml_kem_1024_key_pair(randomness);
         Ok(KemKeypair {
-            public_key,
-            secret_key,
+            public_key: keypair.public_key().clone(),
+            secret_key: keypair.private_key().clone(),
         })
     }
 
@@ -379,8 +412,9 @@ impl HandshakeCryptoProvider for LatebraCrypto {
         secret_key: &MlDsa87SecretKey,
         message: &[u8],
     ) -> Result<MlDsa87Signature, CryptoError> {
-        latebra::signature::sign_message_with_ml_dsa_87(secret_key.as_bytes(), message)
-            .map_err(CryptoError::Latebra)
+        let mut randomness = [0u8; ML_DSA_SIGNING_RANDOMNESS_SIZE];
+        fill_random_bytes(&mut randomness)?;
+        sign_ml_dsa_87(secret_key, message, b"", randomness).map_err(CryptoError::MlDsaSigning)
     }
 
     fn verify_message(
@@ -389,23 +423,17 @@ impl HandshakeCryptoProvider for LatebraCrypto {
         message: &[u8],
         signature: &MlDsa87Signature,
     ) -> Result<(), CryptoError> {
-        latebra::signature::verify_message_with_ml_dsa_87(
-            public_key.as_bytes(),
-            message,
-            signature.as_bytes(),
-        )
-        .map_err(CryptoError::Latebra)
+        verify_ml_dsa_87(public_key, message, b"", signature)
+            .map_err(CryptoError::MlDsaVerification)
     }
 
     fn encapsulate(&self, public_key: &MlKem1024PublicKey) -> Result<KemEnvelope, CryptoError> {
-        let MlKem1024Envelope {
-            ciphertext,
-            shared_secret,
-        } = MlKem1024::encapsulate(public_key.clone()).map_err(CryptoError::Latebra)?;
-
+        let mut randomness = [0u8; ML_KEM_1024_SHARED_SECRET_SIZE];
+        fill_random_bytes(&mut randomness)?;
+        let (ciphertext, shared_secret) = encapsulate_ml_kem_1024(public_key, randomness);
         Ok(KemEnvelope {
             ciphertext,
-            shared_secret: shared_secret.into_bytes(),
+            shared_secret,
         })
     }
 
@@ -414,11 +442,8 @@ impl HandshakeCryptoProvider for LatebraCrypto {
         secret_key: &MlKem1024SecretKey,
         ciphertext: &MlKem1024Ciphertext,
     ) -> Result<[u8; 32], CryptoError> {
-        Ok(
-            MlKem1024::decapsulate(secret_key.clone(), ciphertext.clone())
-                .map_err(CryptoError::Latebra)?
-                .into_bytes(),
-        )
+        let shared_secret = decapsulate_ml_kem_1024(secret_key, ciphertext);
+        Ok(shared_secret)
     }
 
     fn derive_handshake_session_keys(
@@ -434,6 +459,7 @@ impl HandshakeCryptoProvider for LatebraCrypto {
             32,
             argon2_live_parameters(32)?,
         )?;
+        let traffic_secret = to_array_32(&traffic_secret)?;
 
         let c2s_key = argon2_domain_kdf(
             &traffic_secret,
@@ -502,7 +528,7 @@ impl HandshakeCryptoProvider for LatebraCrypto {
     }
 }
 
-impl CryptoProvider for LatebraCrypto {
+impl CryptoProvider for DepotCrypto {
     type Error = CryptoError;
 
     fn seal(
@@ -512,9 +538,16 @@ impl CryptoProvider for LatebraCrypto {
         payload: &[u8],
         associated_data: &[u8],
     ) -> Result<(Vec<u8>, [u8; 16]), Self::Error> {
-        let sealed = seal_with_xchacha20_poly1305(key, nonce, associated_data, payload)
-            .map_err(CryptoError::Latebra)?;
-        Ok((sealed.ciphertext, sealed.tag.into_bytes()))
+        let cipher = XChaCha20Poly1305::new(Key::from_slice(key));
+        let mut ciphertext = payload.to_vec();
+        let tag = cipher
+            .encrypt_in_place_detached(
+                XNonce::from_slice(nonce),
+                associated_data,
+                &mut ciphertext,
+            )
+            .map_err(|_| CryptoError::Aead)?;
+        Ok((ciphertext, *tag.as_ref()))
     }
 
     fn open(
@@ -525,12 +558,17 @@ impl CryptoProvider for LatebraCrypto {
         associated_data: &[u8],
         tag: &[u8; 16],
     ) -> Result<Vec<u8>, Self::Error> {
-        let sealed = SealedXChaCha20Poly1305Message {
-            ciphertext: ciphertext.to_vec(),
-            tag: XChaCha20Poly1305Tag::new(*tag),
-        };
-        open_with_xchacha20_poly1305(key, nonce, associated_data, &sealed)
-            .map_err(CryptoError::Latebra)
+        let cipher = XChaCha20Poly1305::new(Key::from_slice(key));
+        let mut plaintext = ciphertext.to_vec();
+        cipher
+            .decrypt_in_place_detached(
+                XNonce::from_slice(nonce),
+                associated_data,
+                &mut plaintext,
+                Tag::from_slice(tag),
+            )
+            .map_err(|_| CryptoError::Aead)?;
+        Ok(plaintext)
     }
 
     fn derive_rekey(
@@ -572,28 +610,26 @@ impl CryptoProvider for LatebraCrypto {
 }
 
 fn dpk1_key(passphrase: &[u8], salt: &[u8; DPK1_SALT_LEN]) -> Result<[u8; 32], CryptoError> {
-    let parameters = Argon2Parameters::new(
-        Argon2Mode::Argon2id,
-        ARGON2_DPK1_TIME_COST,
+    let params = Argon2Params::new(
         ARGON2_DPK1_MEMORY_KIB,
+        ARGON2_DPK1_TIME_COST,
         ARGON2_DPK1_LANES,
-        32,
-    )
-        .map_err(CryptoError::Latebra)?;
-    let digest =
-        Argon2::hash_password(passphrase, salt, parameters).map_err(CryptoError::Latebra)?;
-    to_array_32(digest.as_bytes())
+        Some(32),
+    )?;
+    let argon2 = Argon2::new(Argon2Algorithm::Argon2id, Argon2Version::V0x13, params);
+    let mut output = [0u8; 32];
+    argon2.hash_password_into(passphrase, salt, &mut output)?;
+    Ok(output)
 }
 
-fn argon2_live_parameters(output_len: u32) -> Result<Argon2Parameters, CryptoError> {
-    Argon2Parameters::new(
-        Argon2Mode::Argon2id,
-        ARGON2_LIVE_TIME_COST,
+fn argon2_live_parameters(output_len: usize) -> Result<Argon2Params, CryptoError> {
+    Argon2Params::new(
         ARGON2_LIVE_MEMORY_KIB,
+        ARGON2_LIVE_TIME_COST,
         ARGON2_LIVE_LANES,
-        output_len,
+        Some(output_len),
     )
-    .map_err(CryptoError::Latebra)
+    .map_err(CryptoError::Argon2)
 }
 
 fn argon2_domain_kdf(
@@ -601,27 +637,23 @@ fn argon2_domain_kdf(
     salt_material: &[u8],
     label: &[u8],
     output_len: usize,
-    parameters: Argon2Parameters,
+    parameters: Argon2Params,
 ) -> Result<Vec<u8>, CryptoError> {
     let mut salt_hasher = Blake3::new();
     salt_hasher.update(b"depot/argon2/salt");
     salt_hasher.update(label);
     salt_hasher.update(salt_material);
     let mut salt = [0u8; DPK1_SALT_LEN];
-    salt_hasher.finalize_xof().squeeze_into(&mut salt);
+    salt_hasher.finalize_xof().fill(&mut salt);
 
     let mut password = Vec::with_capacity(key_material.len() + label.len());
     password.extend_from_slice(key_material);
     password.extend_from_slice(label);
 
-    let digest = Argon2::hash_password(&password, &salt, parameters).map_err(CryptoError::Latebra)?;
-    if digest.as_bytes().len() != output_len {
-        return Err(CryptoError::InvalidLength {
-            expected: output_len,
-            actual: digest.as_bytes().len(),
-        });
-    }
-    Ok(digest.as_bytes().to_vec())
+    let argon2 = Argon2::new(Argon2Algorithm::Argon2id, Argon2Version::V0x13, parameters);
+    let mut output = vec![0u8; output_len];
+    argon2.hash_password_into(&password, &salt, &mut output)?;
+    Ok(output)
 }
 
 fn fill_random_bytes(bytes: &mut [u8]) -> Result<(), CryptoError> {
@@ -682,7 +714,7 @@ mod tests {
 
     #[test]
     fn handshake_session_key_derivation_is_directional() {
-        let crypto = LatebraCrypto;
+        let crypto = DepotCrypto;
         let transcript = [7u8; 64];
         let shared_secret = [9u8; 32];
 
@@ -702,7 +734,7 @@ mod tests {
 
     #[test]
     fn aead_roundtrip_works() {
-        let crypto = LatebraCrypto;
+        let crypto = DepotCrypto;
         let key = [3u8; 32];
         let nonce = [4u8; 24];
         let aad = b"record";
@@ -715,15 +747,15 @@ mod tests {
 
     #[test]
     fn signature_and_kem_bindings_work() {
-        let crypto = LatebraCrypto;
+        let crypto = DepotCrypto;
         let identity = crypto.generate_signing_identity().unwrap();
         let kem = crypto.generate_kem_keypair().unwrap();
         let signature = crypto
-            .sign_message(&identity.secret_key, kem.public_key.as_bytes())
+            .sign_message(&identity.secret_key, kem.public_key.as_ref())
             .unwrap();
 
         crypto
-            .verify_message(&identity.public_key, kem.public_key.as_bytes(), &signature)
+            .verify_message(&identity.public_key, kem.public_key.as_ref(), &signature)
             .unwrap();
 
         let envelope = crypto.encapsulate(&kem.public_key).unwrap();

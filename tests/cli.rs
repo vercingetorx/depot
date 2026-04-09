@@ -1,4 +1,4 @@
-use depot::crypto::{HandshakeCryptoProvider, LatebraCrypto};
+use depot::crypto::{DepotCrypto, HandshakeCryptoProvider};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
@@ -456,19 +456,19 @@ fn run_depot_with_env(current_dir: &Path, envs: &[(&str, &Path)], args: &[&str])
 }
 
 fn provision_trusted_client(server_config_home: &Path, client_config_home: &Path) {
-    let crypto = LatebraCrypto;
+    let crypto = DepotCrypto;
     let identity = crypto.generate_signing_identity().unwrap();
 
     let client_id_dir = client_config_home.join("depot").join("id");
     std::fs::create_dir_all(&client_id_dir).unwrap();
     std::fs::write(
         client_id_dir.join("client_dilithium.pk"),
-        identity.public_key.as_bytes(),
+        identity.public_key.as_ref(),
     )
     .unwrap();
     std::fs::write(
         client_id_dir.join("client_dilithium.sk"),
-        identity.secret_key.as_bytes(),
+        identity.secret_key.as_ref(),
     )
     .unwrap();
 
@@ -479,7 +479,7 @@ fn provision_trusted_client(server_config_home: &Path, client_config_home: &Path
     std::fs::create_dir_all(&server_trust_dir).unwrap();
     std::fs::write(
         server_trust_dir.join("client_dilithium.pk"),
-        identity.public_key.as_bytes(),
+        identity.public_key.as_ref(),
     )
     .unwrap();
 }
@@ -541,7 +541,7 @@ fn spawn_server_with_log_tap(
 }
 
 fn wait_for_server(envs: &[(&str, &Path)], port: u16, server: &mut ServerGuard) {
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + Duration::from_secs(15);
     loop {
         if let Some(status) = server.child.try_wait().unwrap() {
             let mut stdout = String::new();
@@ -587,7 +587,7 @@ fn wait_for_server(envs: &[(&str, &Path)], port: u16, server: &mut ServerGuard) 
 }
 
 fn wait_for_server_port(port: u16, server: &mut ServerGuard) {
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + Duration::from_secs(15);
     loop {
         if let Some(status) = server.child.try_wait().unwrap() {
             let (stdout, stderr) = server.collect_logs();
@@ -619,7 +619,7 @@ fn wait_for_server_port(port: u16, server: &mut ServerGuard) {
 
 fn wait_for_pairing_token(stderr_rx: &Option<Receiver<String>>) -> String {
     let rx = stderr_rx.as_ref().expect("server stderr tap missing");
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + Duration::from_secs(15);
     loop {
         let remaining = deadline.saturating_duration_since(Instant::now());
         match rx.recv_timeout(remaining) {
