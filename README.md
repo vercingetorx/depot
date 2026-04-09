@@ -47,28 +47,28 @@ First run requires `--key-pass` or `--key-pass-file` to generate an encrypted se
 3. Export files and directories from your current directory:
 
 ```bash
-depot export picture.jpg --host server
+depot export picture.jpg
 
 # Export into a specific remote subdirectory
-depot export picture.jpg --host server --dest photos/trips
+depot export picture.jpg --dest photos/trips
 
 # Export the contents of the current directory
-depot export --all --host server
+depot export --all
 ```
 
 4. Import files into your current directory:
 
 ```bash
-depot import movie.mp4 --host server
+depot import movie.mp4
 
 # Pull the entire shared root
-depot import --all --host server
+depot import --all
 
 # Download into a different local destination
-depot import folder --host server --dest ~/Downloads/inbox
+depot import folder --dest ~/Downloads/inbox
 
 # List remote content
-depot ls --host server
+depot ls
 ```
 
 ## CLI
@@ -100,6 +100,7 @@ Tips:
 - `depot serve` uses the current directory as the server root unless `--root` is provided.
 - `depot export` and `depot import` use the current directory by default.
 - Skip-existing behavior is on by default for export/import; use `--no-skip` or `--noskip` to disable it.
+- `--host` and `--port` are only needed to override client defaults; if they are set in config, the examples above work as written.
 
 ## Config
 
