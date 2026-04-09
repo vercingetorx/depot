@@ -3,7 +3,7 @@ use latebra::aead::{
     seal_with_xchacha20_poly1305,
 };
 use latebra::hash::Blake3;
-use latebra::kdf::{Argon2, Argon2Mode, Argon2Parameters, HkdfHmacSha512};
+use latebra::kdf::{Argon2, Argon2Mode, Argon2Parameters};
 use latebra::kem::{
     MlKem1024, MlKem1024Ciphertext, MlKem1024Envelope, MlKem1024KeyPair, MlKem1024PublicKey,
     MlKem1024SecretKey, generate_ml_kem_1024_keypair,
@@ -26,6 +26,12 @@ const DPK1_MAGIC: &[u8; 4] = b"DPK1";
 const DPK1_SALT_LEN: usize = 16;
 const DPK1_NONCE_LEN: usize = 24;
 const DPK1_TAG_LEN: usize = 16;
+const ARGON2_LIVE_TIME_COST: u32 = 3;
+const ARGON2_LIVE_MEMORY_KIB: u32 = 131072;
+const ARGON2_LIVE_LANES: u32 = 1;
+const ARGON2_DPK1_TIME_COST: u32 = 4;
+const ARGON2_DPK1_MEMORY_KIB: u32 = 262144;
+const ARGON2_DPK1_LANES: u32 = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionKeys {
@@ -421,22 +427,42 @@ impl HandshakeCryptoProvider for LatebraCrypto {
         transcript_hash: [u8; 64],
         outbound_is_client_to_server: bool,
     ) -> Result<SessionKeys, CryptoError> {
-        let salt = transcript_salt(&transcript_hash)?;
-        let traffic_secret =
-            HkdfHmacSha512::derive_key(Some(&salt), &shared_secret, TRAFFIC_SECRET_INFO, 32)
-                .map_err(CryptoError::Latebra)?;
-        let traffic_secret = to_array_32(&traffic_secret)?;
+        let traffic_secret = argon2_domain_kdf(
+            &shared_secret,
+            &transcript_hash,
+            TRAFFIC_SECRET_INFO,
+            32,
+            argon2_live_parameters(32)?,
+        )?;
 
-        let c2s_key = HkdfHmacSha512::derive_key(Some(&salt), &traffic_secret, C2S_KEY_INFO, 32)
-            .map_err(CryptoError::Latebra)?;
-        let c2s_nonce =
-            HkdfHmacSha512::derive_key(Some(&salt), &traffic_secret, C2S_NONCE_INFO, 16)
-                .map_err(CryptoError::Latebra)?;
-        let s2c_key = HkdfHmacSha512::derive_key(Some(&salt), &traffic_secret, S2C_KEY_INFO, 32)
-            .map_err(CryptoError::Latebra)?;
-        let s2c_nonce =
-            HkdfHmacSha512::derive_key(Some(&salt), &traffic_secret, S2C_NONCE_INFO, 16)
-                .map_err(CryptoError::Latebra)?;
+        let c2s_key = argon2_domain_kdf(
+            &traffic_secret,
+            &transcript_hash,
+            C2S_KEY_INFO,
+            32,
+            argon2_live_parameters(32)?,
+        )?;
+        let c2s_nonce = argon2_domain_kdf(
+            &traffic_secret,
+            &transcript_hash,
+            C2S_NONCE_INFO,
+            16,
+            argon2_live_parameters(16)?,
+        )?;
+        let s2c_key = argon2_domain_kdf(
+            &traffic_secret,
+            &transcript_hash,
+            S2C_KEY_INFO,
+            32,
+            argon2_live_parameters(32)?,
+        )?;
+        let s2c_nonce = argon2_domain_kdf(
+            &traffic_secret,
+            &transcript_hash,
+            S2C_NONCE_INFO,
+            16,
+            argon2_live_parameters(16)?,
+        )?;
 
         let (tx_key, tx_nonce_prefix, rx_key, rx_nonce_prefix) = if outbound_is_client_to_server {
             (
@@ -514,12 +540,20 @@ impl CryptoProvider for LatebraCrypto {
         outbound_is_client_to_server: bool,
     ) -> Result<RekeyMaterial, Self::Error> {
         let epoch_bytes = epoch.to_le_bytes();
-        let c2s =
-            HkdfHmacSha512::derive_key(Some(traffic_secret), &epoch_bytes, REKEY_C2S_INFO, 48)
-                .map_err(CryptoError::Latebra)?;
-        let s2c =
-            HkdfHmacSha512::derive_key(Some(traffic_secret), &epoch_bytes, REKEY_S2C_INFO, 48)
-                .map_err(CryptoError::Latebra)?;
+        let c2s = argon2_domain_kdf(
+            traffic_secret,
+            &epoch_bytes,
+            REKEY_C2S_INFO,
+            48,
+            argon2_live_parameters(48)?,
+        )?;
+        let s2c = argon2_domain_kdf(
+            traffic_secret,
+            &epoch_bytes,
+            REKEY_S2C_INFO,
+            48,
+            argon2_live_parameters(48)?,
+        )?;
 
         let (tx_material, rx_material) = if outbound_is_client_to_server {
             (&c2s, &s2c)
@@ -537,20 +571,57 @@ impl CryptoProvider for LatebraCrypto {
     }
 }
 
-fn transcript_salt(transcript_hash: &[u8; 64]) -> Result<[u8; 64], CryptoError> {
-    let mut hasher = Blake3::new();
-    hasher.update(transcript_hash);
-    let mut output = [0u8; 64];
-    hasher.finalize_xof().squeeze_into(&mut output);
-    Ok(output)
-}
-
 fn dpk1_key(passphrase: &[u8], salt: &[u8; DPK1_SALT_LEN]) -> Result<[u8; 32], CryptoError> {
-    let parameters = Argon2Parameters::new(Argon2Mode::Argon2id, 2, 65536, 1, 32)
+    let parameters = Argon2Parameters::new(
+        Argon2Mode::Argon2id,
+        ARGON2_DPK1_TIME_COST,
+        ARGON2_DPK1_MEMORY_KIB,
+        ARGON2_DPK1_LANES,
+        32,
+    )
         .map_err(CryptoError::Latebra)?;
     let digest =
         Argon2::hash_password(passphrase, salt, parameters).map_err(CryptoError::Latebra)?;
     to_array_32(digest.as_bytes())
+}
+
+fn argon2_live_parameters(output_len: u32) -> Result<Argon2Parameters, CryptoError> {
+    Argon2Parameters::new(
+        Argon2Mode::Argon2id,
+        ARGON2_LIVE_TIME_COST,
+        ARGON2_LIVE_MEMORY_KIB,
+        ARGON2_LIVE_LANES,
+        output_len,
+    )
+    .map_err(CryptoError::Latebra)
+}
+
+fn argon2_domain_kdf(
+    key_material: &[u8],
+    salt_material: &[u8],
+    label: &[u8],
+    output_len: usize,
+    parameters: Argon2Parameters,
+) -> Result<Vec<u8>, CryptoError> {
+    let mut salt_hasher = Blake3::new();
+    salt_hasher.update(b"depot/argon2/salt");
+    salt_hasher.update(label);
+    salt_hasher.update(salt_material);
+    let mut salt = [0u8; DPK1_SALT_LEN];
+    salt_hasher.finalize_xof().squeeze_into(&mut salt);
+
+    let mut password = Vec::with_capacity(key_material.len() + label.len());
+    password.extend_from_slice(key_material);
+    password.extend_from_slice(label);
+
+    let digest = Argon2::hash_password(&password, &salt, parameters).map_err(CryptoError::Latebra)?;
+    if digest.as_bytes().len() != output_len {
+        return Err(CryptoError::InvalidLength {
+            expected: output_len,
+            actual: digest.as_bytes().len(),
+        });
+    }
+    Ok(digest.as_bytes().to_vec())
 }
 
 fn fill_random_bytes(bytes: &mut [u8]) -> Result<(), CryptoError> {
