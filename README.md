@@ -80,11 +80,11 @@ depot serve [--listen IP] [--port N] [--root DIR] [--log LEVEL]
 
 depot export FILE... [--host HOST] [--port N]
                      [--dest DIR] [--all]
-                     [--skip-existing] [--no-skip | --noskip] [--log LEVEL]
+                     [--no-skip | --noskip] [--log LEVEL]
 
 depot import ITEM... [--host HOST] [--port N]
                      [--dest DIR] [--all]
-                     [--skip-existing] [--no-skip | --noskip] [--log LEVEL]
+                     [--no-skip | --noskip] [--log LEVEL]
 
 depot ls [PATH] [--host HOST] [--port N] [--log LEVEL]
 
