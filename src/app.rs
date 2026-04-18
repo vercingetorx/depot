@@ -1417,13 +1417,17 @@ impl App {
             }
 
             if metadata.is_dir() {
-                let top = remote_basename(source)?;
+                let top = if plan.include_top {
+                    Some(remote_basename(source)?)
+                } else {
+                    None
+                };
                 collect_directory_jobs(
                     source,
                     source,
                     plan.destination.as_ref(),
                     plan.include_top,
-                    &top,
+                    top.as_deref().unwrap_or(""),
                     &mut jobs,
                 )?;
                 continue;
@@ -1609,6 +1613,12 @@ fn single_file_list_path(
 fn remote_basename(path: &Path) -> Result<String, AppError> {
     let name = path
         .file_name()
+        .map(|name| name.to_owned())
+        .or_else(|| {
+            std::fs::canonicalize(path)
+                .ok()
+                .and_then(|canonical| canonical.file_name().map(|name| name.to_owned()))
+        })
         .ok_or_else(|| AppError::InvalidLocalSource(path.to_path_buf()))?;
     let name = name
         .to_str()
@@ -2195,6 +2205,76 @@ mod tests {
             std::fs::read(root_dir.path().join("music/album/disc1/track1.flac")).unwrap(),
             b"t1"
         );
+    }
+
+    #[tokio::test]
+    async fn export_roundtrip_all_style_directory_source_omits_top_level_wrapper() {
+        let root_dir = tempdir().unwrap();
+        let local_dir = tempdir().unwrap();
+        let source_dir = local_dir.path().join("album");
+        std::fs::create_dir(&source_dir).unwrap();
+        std::fs::create_dir(source_dir.join("disc1")).unwrap();
+        std::fs::write(source_dir.join("disc1").join("track1.flac"), b"t1").unwrap();
+        std::fs::write(source_dir.join("cover.jpg"), b"jpg").unwrap();
+        let all_style_source = source_dir.join(".");
+
+        let app = App::new(Config::default());
+        let root = app.canonical_server_root(root_dir.path()).unwrap();
+        let identity = DepotCrypto.generate_signing_identity().unwrap();
+        let expected_server_identity = identity.public_key.clone();
+        let client_identity = DepotCrypto.generate_signing_identity().unwrap();
+
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server_options = app.default_server_runtime_options(
+            root,
+            identity,
+            SandboxPolicy::Enforced,
+            false,
+            TestTrustStore::with_trusted(&client_identity.public_key),
+        );
+
+        let server_app = app.clone();
+        let server_task = tokio::spawn(async move {
+            server_app
+                .serve_once(&listener, &server_options)
+                .await
+                .unwrap();
+        });
+
+        let batch = app
+            .export(
+                ExportPlan {
+                    endpoint: Endpoint::new(addr.ip().to_string(), addr.port()),
+                    sources: vec![all_style_source],
+                    destination: Some(RemotePath::new("music")),
+                    include_top: false,
+                    skip_existing: false,
+                    log_level: LogLevel::Info,
+                },
+                app.default_client_runtime_options(
+                    Some(expected_server_identity),
+                    client_identity,
+                    None,
+                    None,
+                ),
+            )
+            .await
+            .unwrap();
+        let batch = batch.value;
+
+        server_task.await.unwrap();
+
+        assert_eq!(batch.result.sent_files, 2);
+        assert_eq!(
+            std::fs::read(root_dir.path().join("music/cover.jpg")).unwrap(),
+            b"jpg"
+        );
+        assert_eq!(
+            std::fs::read(root_dir.path().join("music/disc1/track1.flac")).unwrap(),
+            b"t1"
+        );
+        assert!(!root_dir.path().join("music/album").exists());
     }
 
     #[tokio::test]
