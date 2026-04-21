@@ -34,15 +34,17 @@ depot config --init
 ```
 
 Edit `~/.config/depot/depot.conf` to set those defaults if you want them.
+The examples below assume `client.server = "home"` is configured.
 
 2. Start the server from the directory you want to share:
 
 ```bash
 cd /srv/media
-depot serve --listen 0.0.0.0 --port 60006 --key-pass "change-me"
+depot serve --key-pass "change-me"
 ```
 
 First run requires `--key-pass` or `--key-pass-file` to generate an encrypted server identity key. Later runs must use the same passphrase.
+Use `--root`, `--listen`, or `--port` only when you want to override the default server behavior.
 
 3. Export files and directories from your current directory:
 
@@ -115,15 +117,15 @@ Tips:
 sandbox = true
 
 [client]
-# server = home
+server = "home"
 # log = info
 
-# [servers.home]
-# host = 192.168.1.10
-# port = 60006
+[servers.home]
+host = "localhost"
+port = 60006
 
 # [servers.vps]
-# host = files.example.com
+# host = "files.example.com"
 # port = 60006
 ```
 

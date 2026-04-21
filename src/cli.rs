@@ -468,7 +468,7 @@ fn run_config(args: &ConfigArgs) -> Result<(), RunError> {
     }
 
     let template =
-        "# depot configuration\n\n[server]\n# listen = 0.0.0.0\n# port = 60006\nsandbox = true\n\n[client]\n# server = home\n# log = info\n\n# [servers.home]\n# host = 192.168.1.10\n# port = 60006\n"
+        "# depot configuration\n\n[server]\n# listen = 0.0.0.0\n# port = 60006\nsandbox = true\n\n[client]\nserver = \"home\"\n# log = info\n\n[servers.home]\nhost = \"localhost\"\nport = 60006\n\n# [servers.vps]\n# host = \"files.example.com\"\n# port = 60006\n"
             .to_owned();
     std::fs::write(&path, template)?;
     println!("Wrote config: {}", path.display());

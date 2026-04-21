@@ -31,7 +31,10 @@ fn config_init_writes_default_config() {
     let contents = std::fs::read_to_string(config_path).unwrap();
     assert!(contents.contains("[server]"));
     assert!(contents.contains("[client]"));
-    assert!(contents.contains("# server = home"));
+    assert!(contents.contains("server = \"home\""));
+    assert!(contents.contains("[servers.home]"));
+    assert!(contents.contains("host = \"localhost\""));
+    assert!(contents.contains("port = 60006"));
     let client_section = contents
         .split("[client]\n")
         .nth(1)
