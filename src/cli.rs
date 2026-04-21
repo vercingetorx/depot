@@ -64,9 +64,11 @@ pub struct ServeArgs {
 pub struct ExportArgs {
     #[arg()]
     pub sources: Vec<PathBuf>,
-    #[arg(long, default_value = "")]
+    #[arg(long, help = "Select a named server from config")]
+    pub server: Option<String>,
+    #[arg(long, default_value = "", help = "Override the resolved server host for this command")]
     pub host: String,
-    #[arg(long, default_value_t = 0)]
+    #[arg(long, default_value_t = 0, help = "Override the resolved server port for this command")]
     pub port: u16,
     #[arg(long)]
     pub dest: Option<String>,
@@ -84,9 +86,11 @@ pub struct ExportArgs {
 pub struct ImportArgs {
     #[arg()]
     pub sources: Vec<String>,
-    #[arg(long, default_value = "")]
+    #[arg(long, help = "Select a named server from config")]
+    pub server: Option<String>,
+    #[arg(long, default_value = "", help = "Override the resolved server host for this command")]
     pub host: String,
-    #[arg(long, default_value_t = 0)]
+    #[arg(long, default_value_t = 0, help = "Override the resolved server port for this command")]
     pub port: u16,
     #[arg(long)]
     pub dest: Option<PathBuf>,
@@ -104,9 +108,11 @@ pub struct ImportArgs {
 pub struct ListArgs {
     #[arg()]
     pub path: Option<String>,
-    #[arg(long, default_value = "")]
+    #[arg(long, help = "Select a named server from config")]
+    pub server: Option<String>,
+    #[arg(long, default_value = "", help = "Override the resolved server host for this command")]
     pub host: String,
-    #[arg(long, default_value_t = 0)]
+    #[arg(long, default_value_t = 0, help = "Override the resolved server port for this command")]
     pub port: u16,
     #[arg(long, default_value = "info")]
     pub log: String,
@@ -374,7 +380,8 @@ impl TryFrom<&Commands> for Command {
                     .map_err(|_| CliError::InvalidLogLevel(args.log.clone()))?,
             })),
             Commands::Export(args) => Ok(Command::Export(ExportPlan {
-                endpoint: Endpoint::new(args.host.clone(), args.port),
+                endpoint: Endpoint::new(args.host.clone(), args.port)
+                    .with_server(args.server.clone()),
                 sources: if args.all && args.sources.is_empty() {
                     vec![PathBuf::from(".")]
                 } else {
@@ -389,7 +396,8 @@ impl TryFrom<&Commands> for Command {
                     .map_err(|_| CliError::InvalidLogLevel(args.log.clone()))?,
             })),
             Commands::Import(args) => Ok(Command::Import(ImportPlan {
-                endpoint: Endpoint::new(args.host.clone(), args.port),
+                endpoint: Endpoint::new(args.host.clone(), args.port)
+                    .with_server(args.server.clone()),
                 sources: if args.all && args.sources.is_empty() {
                     vec![RemotePath::new(".")]
                 } else {
@@ -404,7 +412,8 @@ impl TryFrom<&Commands> for Command {
                     .map_err(|_| CliError::InvalidLogLevel(args.log.clone()))?,
             })),
             Commands::Ls(args) => Ok(Command::List(ListPlan {
-                endpoint: Endpoint::new(args.host.clone(), args.port),
+                endpoint: Endpoint::new(args.host.clone(), args.port)
+                    .with_server(args.server.clone()),
                 path: args.path.clone().map(RemotePath::new),
                 log_level: args
                     .log
@@ -449,7 +458,6 @@ fn run_config(args: &ConfigArgs) -> Result<(), RunError> {
         )));
     }
 
-    let config = Config::default();
     let path = config_path();
     let parent = path.parent().expect("config path has parent");
     std::fs::create_dir_all(parent)?;
@@ -459,17 +467,16 @@ fn run_config(args: &ConfigArgs) -> Result<(), RunError> {
         return Ok(());
     }
 
-    let template = format!(
-        "# depot configuration\n\n[server]\n# listen = 0.0.0.0\n# port = 60006\nsandbox = true\n\n[client]\n# host = {}\n# port = {}\n# log = info\n",
-        config.client.endpoint.host, config.client.endpoint.port
-    );
+    let template =
+        "# depot configuration\n\n[server]\n# listen = 0.0.0.0\n# port = 60006\nsandbox = true\n\n[client]\n# server = home\n# log = info\n\n# [servers.home]\n# host = 192.168.1.10\n# port = 60006\n"
+            .to_owned();
     std::fs::write(&path, template)?;
     println!("Wrote config: {}", path.display());
     Ok(())
 }
 
 async fn run_serve(app: &App, args: &ServeArgs) -> Result<(), RunError> {
-    let command = app.apply_client_defaults(Command::try_from(&Commands::Serve(args.clone()))?);
+    let command = app.apply_client_defaults(Command::try_from(&Commands::Serve(args.clone()))?)?;
     let Command::Serve(options) = command else {
         unreachable!()
     };
@@ -527,7 +534,7 @@ async fn run_serve(app: &App, args: &ServeArgs) -> Result<(), RunError> {
 }
 
 async fn run_export(app: &App, args: &ExportArgs) -> Result<(), RunError> {
-    let command = app.apply_client_defaults(Command::try_from(&Commands::Export(args.clone()))?);
+    let command = app.apply_client_defaults(Command::try_from(&Commands::Export(args.clone()))?)?;
     let Command::Export(plan) = command else {
         unreachable!()
     };
@@ -577,7 +584,7 @@ async fn run_export(app: &App, args: &ExportArgs) -> Result<(), RunError> {
 }
 
 async fn run_import(app: &App, args: &ImportArgs) -> Result<(), RunError> {
-    let command = app.apply_client_defaults(Command::try_from(&Commands::Import(args.clone()))?);
+    let command = app.apply_client_defaults(Command::try_from(&Commands::Import(args.clone()))?)?;
     let Command::Import(plan) = command else {
         unreachable!()
     };
@@ -627,7 +634,7 @@ async fn run_import(app: &App, args: &ImportArgs) -> Result<(), RunError> {
 }
 
 async fn run_list(app: &App, args: &ListArgs) -> Result<(), RunError> {
-    let command = app.apply_client_defaults(Command::try_from(&Commands::Ls(args.clone()))?);
+    let command = app.apply_client_defaults(Command::try_from(&Commands::Ls(args.clone()))?)?;
     let Command::List(plan) = command else {
         unreachable!()
     };
@@ -865,6 +872,23 @@ mod tests {
         let command = Command::try_from(&cli.command).unwrap();
         match command {
             Command::Import(plan) => assert!(!plan.skip_existing),
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_named_server_selection_flags() {
+        let cli = Cli::parse_from(["depot", "export", "--server", "home", "file.txt"]);
+        let command = Command::try_from(&cli.command).unwrap();
+        match command {
+            Command::Export(plan) => assert_eq!(plan.endpoint.server.as_deref(), Some("home")),
+            other => panic!("unexpected command: {other:?}"),
+        }
+
+        let cli = Cli::parse_from(["depot", "ls", "--server", "vps"]);
+        let command = Command::try_from(&cli.command).unwrap();
+        match command {
+            Command::List(plan) => assert_eq!(plan.endpoint.server.as_deref(), Some("vps")),
             other => panic!("unexpected command: {other:?}"),
         }
     }

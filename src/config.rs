@@ -1,11 +1,13 @@
 use crate::core::{Endpoint, LogLevel, SandboxPolicy};
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Config {
     pub server: ServerDefaults,
     pub client: ClientDefaults,
+    pub servers: HashMap<String, Endpoint>,
 }
 
 impl Default for Config {
@@ -13,6 +15,7 @@ impl Default for Config {
         Self {
             server: ServerDefaults::default(),
             client: ClientDefaults::default(),
+            servers: HashMap::new(),
         }
     }
 }
@@ -36,14 +39,14 @@ impl Default for ServerDefaults {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClientDefaults {
-    pub endpoint: Endpoint,
+    pub server: Option<String>,
     pub log_level: LogLevel,
 }
 
 impl Default for ClientDefaults {
     fn default() -> Self {
         Self {
-            endpoint: Endpoint::new("localhost", 60006),
+            server: None,
             log_level: LogLevel::Info,
         }
     }
@@ -54,6 +57,10 @@ pub enum ConfigError {
     ParseToml(String),
     Read(std::io::Error),
     InvalidLogLevel(String),
+    MissingClientDefaultServer,
+    MissingClientTarget,
+    UnknownNamedServer(String),
+    NamedServerMissingHost(String),
 }
 
 impl std::fmt::Display for ConfigError {
@@ -62,6 +69,21 @@ impl std::fmt::Display for ConfigError {
             Self::ParseToml(err) => write!(f, "failed to parse config: {err}"),
             Self::Read(err) => write!(f, "failed to read config: {err}"),
             Self::InvalidLogLevel(value) => write!(f, "invalid log level: {value}"),
+            Self::MissingClientDefaultServer => {
+                write!(f, "named servers are configured but client.server is not set")
+            }
+            Self::MissingClientTarget => {
+                write!(
+                    f,
+                    "no server selected; set client.server in config or use --server or --host"
+                )
+            }
+            Self::UnknownNamedServer(name) => {
+                write!(f, "unknown named server: {name}")
+            }
+            Self::NamedServerMissingHost(name) => {
+                write!(f, "named server {name} is missing host")
+            }
         }
     }
 }
@@ -75,6 +97,8 @@ struct RawConfig {
     server: RawServerDefaults,
     #[serde(default)]
     client: RawClientDefaults,
+    #[serde(default)]
+    servers: HashMap<String, RawNamedServer>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -88,9 +112,15 @@ struct RawServerDefaults {
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawClientDefaults {
+    server: Option<String>,
+    log: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawNamedServer {
     host: Option<String>,
     port: Option<u16>,
-    log: Option<String>,
 }
 
 impl Config {
@@ -112,16 +142,26 @@ impl Config {
                 SandboxPolicy::Disabled
             };
         }
-        if let Some(host) = raw.client.host {
-            config.client.endpoint.host = host;
-        }
-        if let Some(port) = raw.client.port {
-            config.client.endpoint.port = port;
-        }
+        config.client.server = raw.client.server;
         if let Some(log) = raw.client.log {
             config.client.log_level = log
                 .parse()
                 .map_err(|_| ConfigError::InvalidLogLevel(log.clone()))?;
+        }
+        for (name, raw_server) in raw.servers {
+            let host = raw_server
+                .host
+                .ok_or_else(|| ConfigError::NamedServerMissingHost(name.clone()))?;
+            let port = raw_server.port.unwrap_or(60006);
+            config.servers.insert(name, Endpoint::new(host, port));
+        }
+        if !config.servers.is_empty() && config.client.server.is_none() {
+            return Err(ConfigError::MissingClientDefaultServer);
+        }
+        if let Some(name) = &config.client.server
+            && !config.servers.contains_key(name)
+        {
+            return Err(ConfigError::UnknownNamedServer(name.clone()));
         }
         Ok(config)
     }
@@ -202,8 +242,9 @@ mod tests {
     fn defaults_are_v3_aligned() {
         let config = Config::default();
         assert_eq!(config.server.listen, "0.0.0.0");
-        assert_eq!(config.client.endpoint.host, "localhost");
         assert_eq!(config.client.log_level, LogLevel::Info);
+        assert!(config.client.server.is_none());
+        assert!(config.servers.is_empty());
     }
 
     #[test]
@@ -226,7 +267,7 @@ mod tests {
     fn parse_errors_hint_for_unquoted_host_strings() {
         let err = Config::parse_toml(
             r#"
-            [client]
+            [servers.home]
             host = 192.168.68.11
             "#,
         )
@@ -236,5 +277,58 @@ mod tests {
         assert!(rendered.contains("failed to parse config:"));
         assert!(rendered.contains("quoted strings"));
         assert!(rendered.contains("host = \"192.168.68.11\""));
+    }
+
+    #[test]
+    fn parses_named_servers_and_default_server() {
+        let config = Config::parse_toml(
+            r#"
+            [client]
+            server = "home"
+
+            [servers.home]
+            host = "storage.lan"
+
+            [servers.vps]
+            host = "files.example.com"
+            port = 61000
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(config.client.server.as_deref(), Some("home"));
+        assert_eq!(config.servers["home"].host, "storage.lan");
+        assert_eq!(config.servers["home"].port, 60006);
+        assert_eq!(config.servers["vps"].host, "files.example.com");
+        assert_eq!(config.servers["vps"].port, 61000);
+    }
+
+    #[test]
+    fn rejects_named_servers_without_default_selection() {
+        let err = Config::parse_toml(
+            r#"
+            [servers.home]
+            host = "storage.lan"
+            "#,
+        )
+        .unwrap_err();
+
+        assert!(matches!(err, ConfigError::MissingClientDefaultServer));
+    }
+
+    #[test]
+    fn rejects_unknown_default_named_server() {
+        let err = Config::parse_toml(
+            r#"
+            [client]
+            server = "vps"
+
+            [servers.home]
+            host = "storage.lan"
+            "#,
+        )
+        .unwrap_err();
+
+        assert!(matches!(err, ConfigError::UnknownNamedServer(name) if name == "vps"));
     }
 }

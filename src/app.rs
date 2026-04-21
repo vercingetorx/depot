@@ -1,4 +1,4 @@
-use crate::config::Config;
+use crate::config::{Config, ConfigError};
 use crate::core::{
     BatchReport, Command, DepotError, Endpoint, ErrorCode, ExportPlan, ImportPlan, ListPlan,
     Operation, Outcome, OutcomeSeverity, PortablePermission, PortablePermissions, RemotePath,
@@ -93,6 +93,7 @@ struct DownloadState {
 
 #[derive(Debug)]
 pub enum AppError {
+    Config(ConfigError),
     Io(std::io::Error),
     Crypto(CryptoError),
     Handshake(HandshakeError),
@@ -106,6 +107,7 @@ pub enum AppError {
 impl std::fmt::Display for AppError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Config(error) => write!(f, "{error}"),
             Self::Io(error) => write!(f, "{error}"),
             Self::Crypto(error) => write!(f, "{error}"),
             Self::Handshake(error) => write!(f, "{error}"),
@@ -123,6 +125,12 @@ impl std::error::Error for AppError {}
 impl From<std::io::Error> for AppError {
     fn from(value: std::io::Error) -> Self {
         Self::Io(value)
+    }
+}
+
+impl From<ConfigError> for AppError {
+    fn from(value: ConfigError) -> Self {
+        Self::Config(value)
     }
 }
 
@@ -173,13 +181,13 @@ impl App {
         ServerRoot::new(root_override.unwrap_or(current_dir))
     }
 
-    pub fn apply_client_defaults(&self, command: Command) -> Command {
-        match command {
+    pub fn apply_client_defaults(&self, command: Command) -> Result<Command, AppError> {
+        Ok(match command {
             Command::Serve(options) => Command::Serve(self.apply_serve_defaults(options)),
-            Command::Export(plan) => Command::Export(self.apply_export_defaults(plan)),
-            Command::Import(plan) => Command::Import(self.apply_import_defaults(plan)),
-            Command::List(plan) => Command::List(self.apply_list_defaults(plan)),
-        }
+            Command::Export(plan) => Command::Export(self.apply_export_defaults(plan)?),
+            Command::Import(plan) => Command::Import(self.apply_import_defaults(plan)?),
+            Command::List(plan) => Command::List(self.apply_list_defaults(plan)?),
+        })
     }
 
     pub fn canonical_server_root(&self, path: impl AsRef<Path>) -> Result<ServerRoot, AppError> {
@@ -223,7 +231,7 @@ impl App {
         plan: ListPlan,
         options: ClientRuntimeOptions,
     ) -> Result<ClientResponse<Vec<ListEntry>>, AppError> {
-        let endpoint = self.defaulted_endpoint(plan.endpoint);
+        let endpoint = self.defaulted_endpoint(plan.endpoint)?;
         let stream = TcpStream::connect((endpoint.host.as_str(), endpoint.port)).await?;
         let path = plan.path.unwrap_or_else(|| RemotePath::new("."));
         self.list_over_io(stream, path, options).await
@@ -271,7 +279,7 @@ impl App {
         plan: ExportPlan,
         options: ClientRuntimeOptions,
     ) -> Result<ClientResponse<BatchReport>, AppError> {
-        let endpoint = self.defaulted_endpoint(plan.endpoint.clone());
+        let endpoint = self.defaulted_endpoint(plan.endpoint.clone())?;
         let stream = TcpStream::connect((endpoint.host.as_str(), endpoint.port)).await?;
         self.export_over_io_with_progress(stream, plan, options, |_| {}, |_| {})
             .await
@@ -381,7 +389,7 @@ impl App {
         plan: ImportPlan,
         options: ClientRuntimeOptions,
     ) -> Result<ClientResponse<BatchReport>, AppError> {
-        let endpoint = self.defaulted_endpoint(plan.endpoint.clone());
+        let endpoint = self.defaulted_endpoint(plan.endpoint.clone())?;
         let stream = TcpStream::connect((endpoint.host.as_str(), endpoint.port)).await?;
         self.import_over_io_with_progress(stream, plan, options, |_| {}, |_| {})
             .await
@@ -1488,35 +1496,52 @@ impl App {
         options
     }
 
-    fn apply_export_defaults(&self, mut plan: ExportPlan) -> ExportPlan {
-        plan.endpoint = self.defaulted_endpoint(plan.endpoint);
-        plan
+    fn apply_export_defaults(&self, mut plan: ExportPlan) -> Result<ExportPlan, AppError> {
+        plan.endpoint = self.defaulted_endpoint(plan.endpoint)?;
+        Ok(plan)
     }
 
-    fn apply_import_defaults(&self, mut plan: ImportPlan) -> ImportPlan {
-        plan.endpoint = self.defaulted_endpoint(plan.endpoint);
-        plan
+    fn apply_import_defaults(&self, mut plan: ImportPlan) -> Result<ImportPlan, AppError> {
+        plan.endpoint = self.defaulted_endpoint(plan.endpoint)?;
+        Ok(plan)
     }
 
-    fn apply_list_defaults(&self, mut plan: ListPlan) -> ListPlan {
-        plan.endpoint = self.defaulted_endpoint(plan.endpoint);
-        plan
+    fn apply_list_defaults(&self, mut plan: ListPlan) -> Result<ListPlan, AppError> {
+        plan.endpoint = self.defaulted_endpoint(plan.endpoint)?;
+        Ok(plan)
     }
 
-    fn defaulted_endpoint(&self, endpoint: Endpoint) -> Endpoint {
-        let default = &self.config.client.endpoint;
-        Endpoint {
-            host: if endpoint.host.is_empty() {
-                default.host.clone()
-            } else {
-                endpoint.host
-            },
+    fn defaulted_endpoint(&self, endpoint: Endpoint) -> Result<Endpoint, AppError> {
+        let selected_server = endpoint
+            .server
+            .clone()
+            .or_else(|| self.config.client.server.clone());
+        let default = if let Some(name) = &selected_server {
+            self.config
+                .servers
+                .get(name)
+                .cloned()
+                .ok_or_else(|| ConfigError::UnknownNamedServer(name.clone()))?
+        } else {
+            Endpoint::new("", 60006)
+        };
+        let host = if endpoint.host.is_empty() {
+            default.host
+        } else {
+            endpoint.host
+        };
+        if host.is_empty() {
+            return Err(ConfigError::MissingClientTarget.into());
+        }
+        Ok(Endpoint {
+            server: selected_server,
+            host,
             port: if endpoint.port == 0 {
                 default.port
             } else {
                 endpoint.port
             },
-        }
+        })
     }
 }
 
@@ -1960,6 +1985,125 @@ mod tests {
                 "unexpected enrollment in trusted app test",
             ))
         }
+    }
+
+    #[test]
+    fn resolves_named_server_from_config_default() {
+        let config = Config::parse_toml(
+            r#"
+            [client]
+            server = "home"
+
+            [servers.home]
+            host = "storage.lan"
+            port = 61000
+            "#,
+        )
+        .unwrap();
+        let app = App::new(config);
+
+        let command = app
+            .apply_client_defaults(Command::List(ListPlan {
+                endpoint: Endpoint::new("", 0),
+                path: None,
+                log_level: LogLevel::Info,
+            }))
+            .unwrap();
+
+        match command {
+            Command::List(plan) => {
+                assert_eq!(plan.endpoint.server.as_deref(), Some("home"));
+                assert_eq!(plan.endpoint.host, "storage.lan");
+                assert_eq!(plan.endpoint.port, 61000);
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn resolves_named_server_with_host_port_overrides() {
+        let config = Config::parse_toml(
+            r#"
+            [client]
+            server = "home"
+
+            [servers.home]
+            host = "storage.lan"
+            port = 60006
+            "#,
+        )
+        .unwrap();
+        let app = App::new(config);
+
+        let command = app
+            .apply_client_defaults(Command::List(ListPlan {
+                endpoint: Endpoint::new("override.example.com", 62000)
+                    .with_server(Some("home".to_owned())),
+                path: None,
+                log_level: LogLevel::Info,
+            }))
+            .unwrap();
+
+        match command {
+            Command::List(plan) => {
+                assert_eq!(plan.endpoint.server.as_deref(), Some("home"));
+                assert_eq!(plan.endpoint.host, "override.example.com");
+                assert_eq!(plan.endpoint.port, 62000);
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn explicit_named_server_overrides_config_default_server() {
+        let config = Config::parse_toml(
+            r#"
+            [client]
+            server = "home"
+
+            [servers.home]
+            host = "storage.lan"
+            port = 60006
+
+            [servers.vps]
+            host = "files.example.com"
+            port = 61000
+            "#,
+        )
+        .unwrap();
+        let app = App::new(config);
+
+        let command = app
+            .apply_client_defaults(Command::List(ListPlan {
+                endpoint: Endpoint::new("", 0).with_server(Some("vps".to_owned())),
+                path: None,
+                log_level: LogLevel::Info,
+            }))
+            .unwrap();
+
+        match command {
+            Command::List(plan) => {
+                assert_eq!(plan.endpoint.server.as_deref(), Some("vps"));
+                assert_eq!(plan.endpoint.host, "files.example.com");
+                assert_eq!(plan.endpoint.port, 61000);
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn missing_named_server_and_missing_host_is_an_error() {
+        let app = App::new(Config::default());
+
+        let error = app
+            .apply_client_defaults(Command::List(ListPlan {
+                endpoint: Endpoint::new("", 0),
+                path: None,
+                log_level: LogLevel::Info,
+            }))
+            .unwrap_err();
+
+        assert!(matches!(error, AppError::Config(ConfigError::MissingClientTarget)));
     }
 
     #[tokio::test]

@@ -27,7 +27,7 @@ cargo build --release
 
 ## Quick Start
 
-1. Scaffold a config for stable defaults like host, port, log level, and sandbox:
+1. Scaffold a config for stable defaults like named servers, log level, and sandbox:
 
 ```bash
 depot config --init
@@ -78,15 +78,15 @@ depot serve [--listen IP] [--port N] [--root DIR] [--log LEVEL]
             [--no-sandbox] [--allow-overwrite]
             [--key-pass PASS | --key-pass-file PATH]
 
-depot export FILE... [--host HOST] [--port N]
+depot export FILE... [--server NAME] [--host HOST] [--port N]
                      [--dest DIR] [--all]
                      [--no-skip | --noskip] [--log LEVEL]
 
-depot import ITEM... [--host HOST] [--port N]
+depot import ITEM... [--server NAME] [--host HOST] [--port N]
                      [--dest DIR] [--all]
                      [--no-skip | --noskip] [--log LEVEL]
 
-depot ls [PATH] [--host HOST] [--port N] [--log LEVEL]
+depot ls [PATH] [--server NAME] [--host HOST] [--port N] [--log LEVEL]
 
 depot config --init [--force]
 
@@ -100,7 +100,9 @@ Tips:
 - `depot serve` uses the current directory as the server root unless `--root` is provided.
 - `depot export` and `depot import` use the current directory by default.
 - Skip-existing behavior is on by default for export/import; use `--no-skip` or `--noskip` to disable it.
-- `--host` and `--port` are only needed to override client defaults; if they are set in config, the examples above work as written.
+- Resolution order is: `client.server` default, then `--server`, then `--host` / `--port`.
+- `--server` selects a named server from config.
+- `--host` and `--port` are one-command overrides on top of that resolved endpoint.
 
 ## Config
 
@@ -113,12 +115,26 @@ Tips:
 sandbox = true
 
 [client]
-# host = your.server
-# port = 60006
+# server = home
 # log = info
+
+# [servers.home]
+# host = 192.168.1.10
+# port = 60006
+
+# [servers.vps]
+# host = files.example.com
+# port = 60006
 ```
 
 Config is only for stable preferences. Server pathing is not configured here. `depot serve` serves the current directory unless `--root` is provided.
+
+Named servers:
+
+- Set `client.server = "name"` to choose the default named server.
+- Use `--server name` to select a different named server for one command.
+- `--host` and `--port` override the final resolved endpoint directly for one command.
+- If you do not configure `client.server`, you must use `--server` or `--host` on client commands.
 
 ## Identity And Trust
 
